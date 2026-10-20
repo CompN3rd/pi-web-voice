@@ -6,9 +6,26 @@ The owner rejected the custom `/pi-voice-speech/` deployment requirement. [ADR 0
 
 The parent first probed public headers, then performed actual CORS downloads of all ten pinned model/runtime assets in installed desktop Edge from a loopback page, with `credentials: omit` and `referrerPolicy: no-referrer`. Every decoded byte length and SHA-256 matched the compiled manifest. Final origins were `https://huggingface.co`, `https://us.aws.cdn.hf.co` and `https://cdn.jsdelivr.net`. No signed CDN query URLs were retained in the report. This is current public-distribution/browser evidence, **not** acceptance of a live Pi host's CSP or a Pixel device. No inference-provider request was made. Runtime HTTP Content-Length can represent compressed bytes; decoded bytes are authoritative.
 
-Implementation, integration and independent review are in progress. Live-host/Pixel acceptance remains unperformed.
+### Integrated route-free verification
 
-## Browser-local redesign — current work
+Parent verification at `91efb9a`:
+
+| Check | Result / boundary |
+| --- | --- |
+| `npm run verify` | Strict typecheck/build, **80 TypeScript unit/contract tests + 11 deployment/export tests passed** |
+| `npm run test:browser` | **92 checks passed**; fake inference/media/host, explicit cache/download/import controls, file-picker hide/resume and stale-selection fences |
+| `npm run test:runtime` | Actual pinned ORT imported/cached success, empty-cache refusal, cache reuse, eviction/corruption; no model route; native XHR zero |
+| `npm run test:model -- --output <verified source directory>` | Actual q8 pipeline imported a pack under `connect-src 'self'`, with no model-serving route; synthetic PCM inference 3,035 ms on the final desktop run; zero further HTTP attempts/requests |
+| Production-worker direct-download smoke | Explicit download initialized the full model in desktop Edge, then synthetic inference completed in 4,453 ms with zero inference HTTP; request settings omitted credentials/referrer |
+| Package-size gate | Approximately 2.26 MB uncompressed, below 16 MiB; no model/WASM/import payload included |
+
+The direct-download smoke used only public software distribution, not an inference provider. Redirects are browser-managed; final host validation and decoded hashes are enforced by production code. These timings are desktop synthetic-input measurements, not speech accuracy or Pixel predictions.
+
+Portable export: `C:/Users/Wizar/Documents/projects/pi-web-voice-english.pivoice`, **65,179,058 bytes**, SHA-256 `05d2438db64948229efc8d8178a9ebb75efa234466e7226f09e6f281dc681053`. It was generated from the previously verified local assets, without network, and independently checked for magic, all ten assets' order/length/hash, and exact final size. Keep notices/provenance with the plugin and source pack; redistribution licensing remains a release gate.
+
+Independent review accepted the route-free boundaries but found a corruption-recovery bug: explicit Download reused an invalid cached response forever. `91efb9a` permits exactly one verified replacement per bad entry during explicit Download only. Regressions cover cache/inference no-network refusal, successful replacement and failed replacement without publication/retry. Focused independent re-review returned **“No issues found” / “Merge verdict: OK”**; the accepted finding is closed. Reviewers inspected source; the parent separately executed the checks above. Live-host/Pixel acceptance remains unperformed.
+
+## Historical first browser-local redesign (route-based; superseded by ADR 0001)
 
 The owner replaced the paid Realtime architecture with phone-browser-local speech targeting Google Pixel 8. The historical record below describes the **retired Realtime prototype**, not acceptance of the redesigned speech runtime.
 
@@ -32,7 +49,7 @@ The parent explicitly provisioned the pinned public model pack (no inference ser
 
 No real Pixel 8, actual microphone, Android local-voice, live-host installation or device-level privacy acceptance has been performed. No paid provider calls or live daemon operations were performed.
 
-### New acceptance gates
+### Acceptance gates recorded for the superseded route-based version
 
 1. Explicit speech-pack provisioning with pinned artifact integrity/provenance; matching local runtime assets and operator-configured same-origin `/pi-voice-speech/` static path. Plugin package must remain below the pinned host's 16 MiB artifact cap; pack lives outside the package root.
 2. Actual Whisper inference on the Pixel 8, including model preparation, short English commands, silence/noise, accuracy, latency, memory and thermal behavior.
