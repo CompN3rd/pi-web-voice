@@ -2,14 +2,18 @@
   "name": "@compn3rd/pi-web-voice",
   "version": "0.1.0",
   "private": true,
-  "description": "Experimental native-audio voice cockpit for Pi Web",
+  "description": "Experimental browser-local voice interface for Pi Web",
   "type": "module",
   "license": "MIT",
   "engines": {
     "node": ">=24"
   },
   "files": [
-    "dist",
+    "dist/*.js",
+    "dist/browser/*.js",
+    "dist/browser/speech/ort/LICENSE",
+    "dist/browser/speech/TRANSFORMERS-LICENSE",
+    "dist/browser/speech/speech-pack-provenance.json",
     "README.md",
     "docs",
     "LICENSE"
@@ -37,13 +41,16 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test test/*.test.ts",
+    "test": "node --import tsx --test test/*.test.ts && npm run test:assets",
     "verify": "npm run typecheck && npm test && npm run build",
     "test:browser": "node test/browser.mjs",
     "build:speech": "node scripts/build.mjs --speech-only",
     "speech:provision": "node scripts/provision-speech-pack.mjs",
     "test:speech": "node --import tsx --test test/recognition-*.test.ts",
-    "test:runtime": "node test/recognition-runtime-browser.mjs"
+    "test:runtime": "node test/recognition-runtime-browser.mjs",
+    "check:package": "node scripts/check-package-size.mjs",
+    "test:assets": "node --test test/speech-deployment.test.mjs",
+    "test:model": "npm run build && node test/recognition-model-browser.mjs"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",

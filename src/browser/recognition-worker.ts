@@ -9,7 +9,7 @@ const scope = globalThis as unknown as {
   onmessage: ((event: MessageEvent) => void) | null;
   postMessage(value: unknown): void;
 };
-const base = new URL("./speech/", import.meta.url);
+const base = new URL("/pi-voice-speech/", import.meta.url);
 const urls = speechAssetUrls(base, __SPEECH_ASSETS__);
 const download = globalThis.fetch.bind(globalThis);
 // ORT's pinned glue falls back to synchronous XHR when fetch fails. It must not

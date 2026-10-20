@@ -19,7 +19,7 @@ for (const name of ["ort-wasm-simd-threaded.jsep.mjs", "ort-wasm-simd-threaded.j
   const bytes = await readFile(`node_modules/onnxruntime-web/dist/${name}`);
   const path = `ort/${name}`;
   assets.push({ path, bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") });
-  runtime.set(`/nested/voice/speech/${path}`, bytes);
+  runtime.set(`/pi-voice-speech/${path}`, bytes);
 }
 const cacheName = "pi-voice-runtime-browser-regression";
 const adapter = `
