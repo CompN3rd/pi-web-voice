@@ -14,6 +14,7 @@ export interface Worker {
   text: string;
   question?: string;
   revision: number;
+  companionSequence?: number;
   createdAt: string;
   updatedAt: string;
 }
