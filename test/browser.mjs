@@ -1,105 +1,275 @@
 import { chromium } from "playwright-core";
 import { build } from "esbuild";
 import { existsSync } from "node:fs";
+import { resolve } from "node:path";
 import assert from "node:assert/strict";
-const output = await build({ entryPoints: ["test/browser-fixture.ts"], bundle: true, write: false, format: "esm", platform: "browser", target: "es2022" });
+const output = await build({
+  entryPoints: ["test/browser-fixture.ts"], bundle: true, write: false, format: "esm", platform: "browser", target: "es2022",
+  plugins: [{ name: "fixture-local-recognizer", setup(build) {
+    build.onResolve({ filter: /^\.\/audio\.ts$/ }, args => args.importer.replaceAll("\\", "/").endsWith("/src/browser/index.ts")
+      ? { path: resolve("test/browser-fixture.ts") } : undefined);
+  } }],
+});
 const executablePath = process.env.VOICE_BROWSER_EXECUTABLE ?? (process.platform === "win32" ? "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe" : undefined);
 if (!executablePath || !existsSync(executablePath)) throw new Error("Set VOICE_BROWSER_EXECUTABLE to an installed Chromium/Edge browser; this test downloads none.");
 const browser = await chromium.launch({ executablePath, headless: true });
 let checks = 0;
 try {
   const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
-  const errors = [];
+  page.setDefaultTimeout(10000);
+  const errors = []; const blockedNetwork = [];
   page.on("pageerror", e => errors.push(String(e)));
   await page.route("**/*", route => {
     const url = route.request().url();
     if (url === "http://localhost:43119/") return route.fulfill({ contentType: "text/html", body: '<!doctype html><meta name="viewport" content="width=device-width"><script type="module" src="/fixture.js"></script>' });
     if (url === "http://localhost:43119/fixture.js") return route.fulfill({ contentType: "text/javascript", body: output.outputFiles[0].text });
-    return route.abort();
+    blockedNetwork.push(url); return route.abort();
   });
-  await page.goto("http://localhost:43119/");
-  await page.getByText("No tracked workers in this workspace.").waitFor();
-  await page.getByText("Text fallback and worker model selection").click();
-  await page.getByLabel("Title", { exact: true }).fill("Fixture task");
-  await page.getByLabel("Task text").fill("Inspect tests; do not edit files");
-  await page.getByRole("button", { name: "Propose text task" }).click();
-  await page.getByText("Proposed Fixture task · NOT submitted").waitFor();
+  const button = name => page.getByRole("button", { name, exact: true });
+  const prompt = () => page.getByLabel("Editable transcript / task text");
+  const reset = async () => { await page.goto("http://localhost:43119/"); await page.getByText("No tracked workers in this workspace.").waitFor(); };
+  const prepare = async () => { await button("Prepare local English speech pack").click(); await page.getByText("Local speech ready · audio stays on this device", { exact: true }).waitFor(); };
+  const start = async () => { await button("Start recording").click(); await page.getByText("Listening locally · finish within 20 seconds", { exact: true }).waitFor(); };
+  const propose = async (title = "Fixture task", instruction = "Inspect tests; do not edit files") => {
+    await page.getByLabel("Title", { exact: true }).fill(title);
+    await prompt().fill(instruction);
+    await button("Propose exact instruction").click();
+    await page.getByRole("article", { name: "Exact proposal" }).waitFor();
+  };
+  const createWorker = async () => {
+    await propose(); await button("Approve exact instruction").click();
+    await page.waitForFunction(() => fixture.stats.instructions === 1);
+    await button("Read text / question").waitFor();
+  };
+  const chooseReply = async () => {
+    const value = await page.getByLabel("Instruction target").locator("option").last().getAttribute("value");
+    await page.getByLabel("Instruction target").selectOption(value);
+  };
+  const unchangedDraft = async () => { assert.equal(await prompt().inputValue(), ""); assert.equal(await page.getByRole("article", { name: "Exact proposal" }).count(), 0); checks++; };
+
+  // Text-only manual approval and exact payload, full escaped text, navigation/catalog.
+  await reset();
+  assert.equal(await page.evaluate(() => fixture.stats.captures + fixture.stats.preparations), 0);
+  assert.equal(await page.getByLabel("Local English voice").inputValue(), ""); checks++;
+  await page.getByText("Text fallback and worker model catalog", { exact: true }).click();
+  await button("Load available models").click();
+  await page.waitForFunction(() => fixture.stats.requests.some(r => r.operation === "models"));
+  await page.getByLabel("Worker model (empty = Pi default)").fill("test/model");
+  await propose();
   assert.equal(await page.evaluate(() => fixture.stats.instructions), 0); checks++;
-  await page.getByRole("button", { name: "Approve exact instruction" }).click();
-  await page.waitForFunction(() => fixture.stats.instructions === 1); checks++;
-  await page.getByRole("button", { name: "Read text / question" }).click();
-  await page.getByText("<img src=x onerror=alert('bad')> Escaped result").waitFor();
+  const exactText = await page.getByRole("article", { name: "Exact proposal" }).locator("pre").textContent();
+  await button("Approve exact instruction").dblclick();
+  await page.waitForFunction(() => fixture.stats.instructions === 1);
+  const sent = await page.evaluate(() => fixture.stats.requests.find(r => r.operation === "execute").input.command);
+  assert.equal(sent.prompt, exactText); assert.equal(sent.model, "test/model"); assert.equal(sent.kind, "start");
+  assert.deepEqual(await page.evaluate(() => fixture.stats.requests.filter(r => r.operation === "arm").map(r => r.input)), [{ count: 1 }]); checks++;
+  await button("Read text / question").click();
+  await page.getByText("<img src=x onerror=alert('bad')> Escaped result", { exact: true }).waitFor();
   assert.equal(await page.locator("compn3rd-voice-panel img").count(), 0); checks++;
-  await page.getByRole("button", { name: "Start voice", exact: true }).click();
-  await page.getByText("Listening · microphone audio is being sent to OpenAI", { exact: true }).waitFor();
-  assert.equal(await page.evaluate(() => fixture.stats.connections), 1); checks++;
-  page.on("dialog", dialog => dialog.accept());
-  await page.getByRole("button", { name: "Allow 3 instructions · 10 minutes" }).click();
-  await page.getByText(/3 instruction\(s\) left/).waitFor();
-  const tool = { type: "response.function_call_arguments.done", call_id: "fixture-call", name: "start_worker", arguments: JSON.stringify({ title: "Voice task", prompt: "Inspect code without edits" }) };
-  await page.evaluate(e => { fixture.event({ type: "response.created" }); fixture.event(e); fixture.event(e); fixture.event({ type: "response.done" }); }, tool);
-  await page.waitForFunction(() => fixture.stats.instructions === 2);
-  assert.equal(await page.evaluate(() => fixture.stats.instructions), 2); checks++;
-  await page.waitForFunction(() => fixture.stats.sent.some(e => e.item?.type === "function_call_output"));
-  assert.equal(await page.evaluate(() => fixture.stats.sent.filter(e => e.item?.type === "function_call_output").length), 1); checks++;
-  await page.evaluate(() => fixture.mount("workspace-b"));
-  await page.getByText("Disconnected · microphone off", { exact: true }).waitFor();
-  assert.equal(await page.evaluate(() => fixture.stats.stops), 1);
-  assert.equal(await page.evaluate(() => fixture.stats.disarms.at(-1)), "workspace-a"); checks++;
-  await page.evaluate(() => { fixture.stats.pendingPermission = true; });
-  await page.getByRole("button", { name: "Start voice", exact: true }).click();
-  await page.getByText("Requesting microphone permission…").waitFor();
-  await page.getByRole("button", { name: "Disconnect voice", exact: true }).click();
-  await page.evaluate(() => fixture.resolvePermission());
-  await page.waitForFunction(() => fixture.stats.stops === 2); checks++;
-  // Pending permission must preserve a mute instruction before any track is attached.
-  await page.getByRole("button", { name: "Start voice", exact: true }).click();
-  await page.getByText("Requesting microphone permission…").waitFor();
-  await page.getByRole("button", { name: "Mute microphone", exact: true }).click();
-  await page.evaluate(() => fixture.resolvePermission());
-  await page.getByText("Microphone muted · no captured audio transmitted; tap Resume to speak", { exact: true }).waitFor();
-  await page.waitForFunction(() => fixture.stats.attachedTracks.length === 2);
-  assert.equal(await page.evaluate(() => fixture.stats.attachedTracks.at(-1).enabled), false); checks++;
-  await page.getByRole("button", { name: "Disconnect voice", exact: true }).click();
-  await page.evaluate(() => { fixture.stats.pendingPermission = false; fixture.stats.pendingArm = true; });
-  const armsBefore = await page.evaluate(() => fixture.stats.requests.filter(r => r.operation === "arm").length);
-  await page.getByRole("button", { name: "Allow 3 instructions · 10 minutes" }).click();
-  await page.waitForFunction(n => fixture.stats.requests.filter(r => r.operation === "arm").length > n, armsBefore);
-  await page.getByRole("button", { name: "Revoke allowance", exact: true }).click();
-  await page.evaluate(() => fixture.resolveArm());
-  await page.getByText("Approval was revoked while awaiting the server; instruction was not sent.", { exact: true }).waitFor();
-  await page.getByText("No hands-free allowance. Screen approval required.", { exact: true }).waitFor();
-  assert.equal(await page.evaluate(() => fixture.stats.requests.findLast(r => r.operation === "disarm").input.token), "fixture-token"); checks++;
-  await page.getByLabel("Title", { exact: true }).fill("After revoke");
-  await page.getByLabel("Task text").fill("Must require approval");
-  await page.getByRole("button", { name: "Propose text task" }).click();
-  await page.getByText("Proposed After revoke · NOT submitted").waitFor();
-  assert.equal(await page.evaluate(() => fixture.stats.instructions), 2); checks++;
-  // Unsupported/insecure startup must clean up UI ownership, permitting an explicit retry.
-  await page.evaluate(() => fixture.setMediaSupported(false));
-  await page.getByRole("button", { name: "Start voice", exact: true }).click();
-  await page.getByRole("alert").filter({ hasText: "Microphone requires HTTPS" }).waitFor();
-  assert.equal(await page.getByRole("button", { name: "Start voice", exact: true }).isEnabled(), true);
-  assert.equal(await page.getByRole("button", { name: "Disconnect voice", exact: true }).isEnabled(), false); checks++;
-  await page.evaluate(() => { fixture.setMediaSupported(true); fixture.setSecureContext(false); });
-  await page.getByRole("button", { name: "Start voice", exact: true }).click();
-  await page.getByRole("alert").filter({ hasText: "Microphone requires HTTPS" }).waitFor();
-  assert.equal(await page.getByRole("button", { name: "Start voice", exact: true }).isEnabled(), true); checks++;
-  await page.evaluate(() => fixture.setSecureContext(true));
-  await page.getByRole("button", { name: "Start voice", exact: true }).click();
-  await page.getByText("Listening · microphone audio is being sent to OpenAI", { exact: true }).waitFor();
-  const beforeHide = await page.evaluate(() => fixture.stats.stops);
-  await page.evaluate(() => fixture.setHidden(true));
-  await page.getByText("Page hidden · voice disconnected for privacy. Workers continue.", { exact: true }).waitFor();
-  assert.equal(await page.evaluate(() => fixture.stats.stops), beforeHide + 1); checks++;
-  await page.evaluate(() => fixture.setHidden(false));
+  await button("Open conversation").click();
+  assert.equal(await page.evaluate(() => fixture.stats.navigations[0].sessionId), "exact-session"); checks++;
   const dimensions = await page.evaluate(() => ({ width: innerWidth, scroll: document.documentElement.scrollWidth }));
   assert.ok(dimensions.scroll <= dimensions.width, JSON.stringify(dimensions)); checks++;
-  await page.getByRole("button", { name: "Start voice", exact: true }).click();
-  await page.getByText("Listening · microphone audio is being sent to OpenAI", { exact: true }).waitFor();
-  const beforeUnmount = await page.evaluate(() => fixture.stats.stops);
-  await page.evaluate(() => fixture.unmount());
-  assert.equal(await page.evaluate(() => fixture.stats.stops), beforeUnmount + 1); checks++;
-  assert.deepEqual(errors, []); checks++;
-  console.log(`Browser fixture: ${checks} checks passed (fake host/provider/media, mobile viewport, no external network).`);
+
+  // Explicit local voice only, bounded playback, and half duplex across capture/inference.
+  assert.deepEqual(await page.getByLabel("Local English voice").locator("option").allTextContents(), ["Text only · select a voice explicitly", "Local English (en-US)"]);
+  assert.equal(await button("Speak result / question prefix").isEnabled(), false); checks++;
+  await page.getByLabel("Local English voice").selectOption("Local English");
+  await page.evaluate(() => fixture.setResult("Long result " + "x".repeat(1500)));
+  await button("Read text / question").click();
+  await page.getByText("Playback is truncated: reads only the first 1000 characters. Full text is shown above.", { exact: true }).waitFor();
+  await button("Speak result / question prefix").click();
+  assert.equal(await page.evaluate(() => fixture.stats.spoken[0].text.length), 1000);
+  assert.equal(await page.evaluate(() => fixture.stats.spoken[0].voiceURI), "Local English"); checks++;
+  await prepare();
+  assert.equal(await page.evaluate(() => fixture.stats.captures), 0); checks++;
+  await page.evaluate(() => { fixture.stats.pendingPermission = true; });
+  await button("Start recording").click();
+  await page.getByText("Requesting microphone permission for local capture…", { exact: true }).waitFor();
+  assert.equal(await page.evaluate(() => fixture.stats.speechCancels), 1);
+  assert.equal(await button("Speak result / question prefix").isEnabled(), false); checks++;
+  await page.evaluate(() => fixture.resolvePermission());
+  await button("Finish recording").waitFor();
+  assert.equal(await button("Finish recording").getAttribute("aria-pressed"), "true");
+  assert.equal(await button("Speak worker status").isEnabled(), false); checks++;
+  await page.evaluate(() => { fixture.stats.pendingTranscript = true; });
+  await button("Finish recording").click();
+  await page.getByText("Transcribing on this device · microphone off…", { exact: true }).waitFor();
+  assert.equal(await page.evaluate(() => fixture.stats.stops), 1);
+  assert.equal(await button("Speak result / question prefix").isEnabled(), false); checks++;
+  await page.evaluate(() => fixture.resolveTranscript("Dictated draft only"));
+  await page.waitForFunction(() => document.querySelector("compn3rd-voice-panel").shadowRoot.querySelector("textarea").value === "Dictated draft only");
+  assert.equal(await page.evaluate(() => fixture.stats.instructions), 1);
+  assert.equal(await page.getByRole("article", { name: "Exact proposal" }).count(), 0); checks++;
+  await page.evaluate(() => fixture.removeLocalVoices());
+  await page.getByText("Text only: selected local English voice is no longer available. Select a voice again.", { exact: true }).waitFor();
+  assert.equal(await page.getByLabel("Local English voice").inputValue(), ""); checks++;
+
+  // Explicit reply ID/revision, never freeform routing; revision changes invalidate drafts.
+  await chooseReply();
+  await unchangedDraft();
+  await prompt().fill("Reply to exactly this worker");
+  await button("Propose exact instruction").click();
+  await page.getByRole("article", { name: "Exact proposal" }).getByText(/revision 1/).waitFor();
+  await button("Approve exact instruction").click();
+  await page.waitForFunction(() => fixture.stats.instructions === 2);
+  const reply = await page.evaluate(() => fixture.stats.requests.filter(r => r.operation === "execute").at(-1).input.command);
+  assert.equal(reply.kind, "reply"); assert.equal(reply.workerId, sent.requestId); assert.equal(reply.expectedRevision, 1); assert.equal(reply.model, undefined); checks++;
+  await page.getByText("Worker revision changed · draft discarded. Select an exact target again.", { exact: true }).waitFor();
+  await chooseReply(); await prompt().fill("Old revision draft"); await button("Propose exact instruction").click();
+  await page.evaluate(() => fixture.bumpRevision()); await button("Refresh status").click();
+  await page.getByText("Worker revision changed · draft discarded. Select an exact target again.", { exact: true }).waitFor();
+  await unchangedDraft();
+
+  // Maximum-size PCM automatically finishes, but never dispatches.
+  await reset(); await prepare(); await start();
+  await page.evaluate(() => fixture.reachLimit());
+  await page.getByText("Untrusted local transcript · edit and propose; nothing submitted", { exact: true }).waitFor();
+  assert.equal(await page.evaluate(() => fixture.stats.stops), 1);
+  assert.equal(await page.evaluate(() => fixture.stats.transcriptions), 1);
+  assert.equal(await page.evaluate(() => fixture.stats.instructions), 0); checks++;
+  await page.getByLabel("Title", { exact: true }).fill("Reviewed dictation");
+  await prompt().fill("Corrected exact dictation");
+  await button("Propose exact instruction").click();
+  await page.getByRole("article", { name: "Exact proposal" }).waitFor();
+  await prompt().fill("Final corrected dictation");
+  assert.equal(await page.getByRole("article", { name: "Exact proposal" }).count(), 0);
+  await button("Propose exact instruction").click(); await button("Approve exact instruction").click();
+  await page.waitForFunction(() => fixture.stats.instructions === 1);
+  assert.equal(await page.evaluate(() => fixture.stats.requests.find(r => r.operation === "execute").input.command.prompt), "Final corrected dictation"); checks++;
+
+  // Cancellation at each asynchronous boundary fences late results and requires prepare again.
+  for (const boundary of ["prepare", "permission", "transcript"]) {
+    for (const cancellation of ["off", "context", "hide", "unmount"]) {
+      await reset();
+      if (boundary === "prepare") {
+        await page.evaluate(() => { fixture.stats.pendingPrepare = true; });
+        await button("Prepare local English speech pack").click();
+        await page.getByText("Loading local pack · fixture 50%", { exact: true }).waitFor();
+      } else {
+        await prepare();
+        if (boundary === "permission") {
+          await page.evaluate(() => { fixture.stats.pendingPermission = true; });
+          await button("Start recording").click();
+          await page.getByText("Requesting microphone permission for local capture…", { exact: true }).waitFor();
+        } else {
+          await start(); await page.evaluate(() => { fixture.stats.pendingTranscript = true; });
+          await button("Finish recording").click();
+          await page.getByText("Transcribing on this device · microphone off…", { exact: true }).waitFor();
+        }
+      }
+      if (cancellation === "off") await button("Cancel / voice off").click();
+      else if (cancellation === "context") await page.evaluate(() => fixture.mount("workspace-b"));
+      else if (cancellation === "hide") await page.evaluate(() => fixture.setHidden(true));
+      else await page.evaluate(() => fixture.unmount());
+      await page.evaluate(boundary => {
+        if (boundary === "prepare") fixture.resolvePrepare();
+        else if (boundary === "permission") fixture.resolvePermission();
+        else fixture.resolveTranscript();
+      }, boundary);
+      if (boundary === "permission") await page.waitForFunction(() => fixture.stats.stops === 1);
+      if (cancellation === "hide") await page.evaluate(() => fixture.setHidden(false));
+      if (cancellation === "unmount") await page.evaluate(() => fixture.mount());
+      await unchangedDraft();
+      assert.equal(await button("Start recording").isEnabled(), false);
+      assert.equal(await button("Prepare local English speech pack").isEnabled(), true);
+      assert.equal(await page.evaluate(() => fixture.stats.instructions), 0);
+      assert.equal(await page.getByText("Late pack progress", { exact: true }).count(), 0);
+      assert.ok(await page.evaluate(() => fixture.stats.disarms.includes("workspace-a"))); checks++;
+    }
+  }
+
+  // Target/model changes during inference invalidate the captured target, never rebind.
+  for (const selection of ["target", "model", "session"]) {
+    await reset(); await createWorker(); await prepare(); await start();
+    await page.evaluate(() => { fixture.stats.pendingTranscript = true; });
+    await button("Finish recording").click();
+    await page.getByText("Transcribing on this device · microphone off…", { exact: true }).waitFor();
+    if (selection === "target") await chooseReply();
+    else if (selection === "model") await page.getByLabel("Worker model (empty = Pi default)").fill("test/other");
+    else await page.evaluate(() => fixture.mount("workspace-a", "different-session"));
+    await page.evaluate(() => fixture.resolveTranscript());
+    await unchangedDraft();
+    assert.equal(await page.evaluate(() => fixture.stats.instructions), 1); checks++;
+  }
+
+  // A polled revision change also cancels an in-flight utterance bound to that reply.
+  await reset(); await createWorker(); await chooseReply(); await prepare(); await start();
+  await page.evaluate(() => { fixture.stats.pendingTranscript = true; });
+  await button("Finish recording").click();
+  await page.getByText("Transcribing on this device · microphone off…", { exact: true }).waitFor();
+  await page.evaluate(() => fixture.bumpRevision()); await button("Refresh status").click();
+  await page.getByText("Worker revision changed · draft discarded. Select an exact target again.", { exact: true }).waitFor();
+  await page.evaluate(() => fixture.resolveTranscript()); await unchangedDraft();
+  assert.equal(await button("Start recording").isEnabled(), false);
+  assert.equal(await page.evaluate(() => fixture.stats.instructions), 1); checks++;
+
+  // Exact one-shot approval issuance is fenced by old context/permission epochs.
+  for (const cancellation of ["off", "context", "hide", "unmount", "target"]) {
+    await reset(); await propose();
+    await page.evaluate(() => { fixture.stats.pendingArm = true; });
+    await button("Approve exact instruction").click();
+    await page.waitForFunction(() => fixture.stats.requests.some(r => r.operation === "arm"));
+    if (cancellation === "off") await button("Cancel / voice off").click();
+    else if (cancellation === "context") await page.evaluate(() => fixture.mount("workspace-b"));
+    else if (cancellation === "hide") await page.evaluate(() => fixture.setHidden(true));
+    else if (cancellation === "target") await page.getByLabel("Instruction target").selectOption("");
+    else await page.evaluate(() => fixture.unmount());
+    await page.evaluate(() => fixture.resolveArm());
+    await page.waitForFunction(() => fixture.stats.requests.some(r => r.operation === "disarm" && r.input.token === "fixture-token-1"));
+    const revoked = await page.evaluate(() => fixture.stats.requests.find(r => r.operation === "disarm" && r.input.token));
+    assert.equal(revoked.workspaceId, "workspace-a");
+    assert.equal(await page.evaluate(() => fixture.stats.instructions), 0); checks++;
+  }
+
+  // Uncertain delivery consumes the proposal and never retries the mutation.
+  await reset(); await propose(); await page.evaluate(() => { fixture.stats.failExecute = true; });
+  await button("Approve exact instruction").click();
+  await page.getByRole("alert").filter({ hasText: "Instruction outcome may be unknown" }).waitFor();
+  assert.equal(await button("Approve exact instruction").count(), 0);
+  await button("Refresh status").click();
+  assert.equal(await page.evaluate(() => fixture.stats.instructions), 1); checks++;
+
+  // Unsupported/insecure capture fails locally, text fallback remains usable.
+  for (const unsupported of ["media", "https"]) {
+    await reset(); await prepare();
+    await page.evaluate(kind => kind === "media" ? fixture.setMediaSupported(false) : fixture.setSecureContext(false), unsupported);
+    await button("Start recording").click();
+    await page.getByRole("alert").filter({ hasText: "Local microphone capture requires HTTPS" }).waitFor();
+    assert.equal(await button("Start recording").isEnabled(), false);
+    assert.equal(await button("Prepare local English speech pack").isEnabled(), true);
+    await propose(); assert.equal(await page.evaluate(() => fixture.stats.instructions), 0); checks++;
+  }
+
+  // Active capture and active playback are canceled by off/hide/unmount/context.
+  for (const cancellation of ["off", "hide", "unmount", "context"]) {
+    await reset(); await prepare(); await start();
+    if (cancellation === "off") await button("Cancel / voice off").click();
+    else if (cancellation === "hide") await page.evaluate(() => fixture.setHidden(true));
+    else if (cancellation === "unmount") await page.evaluate(() => fixture.unmount());
+    else await page.evaluate(() => fixture.mount("workspace-b"));
+    await page.waitForFunction(() => fixture.stats.stops === 1);
+    assert.equal(await page.evaluate(() => fixture.stats.transcriptions), 0); checks++;
+    await reset(); await createWorker();
+    await page.getByLabel("Local English voice").selectOption("Local English");
+    await button("Speak worker status").click();
+    if (cancellation === "off") await button("Cancel / voice off").click();
+    else if (cancellation === "hide") await page.evaluate(() => fixture.setHidden(true));
+    else if (cancellation === "unmount") await page.evaluate(() => fixture.unmount());
+    else await page.evaluate(() => fixture.mount("workspace-b"));
+    await page.waitForFunction(() => fixture.stats.speechCancels === 1);
+    await page.evaluate(() => fixture.lateSpeechEnd());
+    assert.equal(await page.getByText("Local speech finished.", { exact: true }).count(), 0); checks++;
+  }
+  // Pending full-text read cannot populate a different workspace.
+  await reset(); await createWorker();
+  await page.evaluate(() => { fixture.stats.pendingRead = true; });
+  await button("Read text / question").click();
+  await page.waitForFunction(() => fixture.stats.requests.some(r => r.operation === "read"));
+  await page.evaluate(() => fixture.mount("workspace-b"));
+  await page.getByText("No tracked workers in this workspace.").waitFor();
+  await page.evaluate(() => fixture.resolveRead());
+  assert.equal(await page.getByText("<img src=x onerror=alert('bad')> Escaped result", { exact: true }).count(), 0); checks++;
+  assert.deepEqual(errors, []); assert.deepEqual(blockedNetwork, []); checks++;
+  console.log(`Browser fixture: ${checks} checks passed (real LocalRecognizer with fake PCM/runtime, fake local synthesis/host, mobile viewport, all networking intercepted; no model downloads or live acceptance).`);
 } finally { await browser.close(); }

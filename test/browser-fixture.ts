@@ -1,78 +1,127 @@
 import { html, render } from "lit";
+import { LocalRecognizer, type LocalRecognitionCallbacks, type LocalRecognitionDependencies } from "../src/browser/audio.ts";
 import "../src/browser/index.ts";
 import type { WorkspacePanelContext } from "@jmfederico/pi-web/plugin-api";
+import type { Worker } from "../src/protocol.ts";
 
-const stats = { stops: 0, connections: 0, instructions: 0, disarms: [] as string[], sent: [] as any[], requests: [] as any[], pendingPermission: false, pendingArm: false, attachedTracks: [] as any[] };
-let permissionResolve: ((value: any) => void) | undefined;
-let lastChannel: any;
-let armResolve: (() => void) | undefined;
-const stream = () => {
-  const track = { stopped: false, enabled: true, stop() { if (!this.stopped) { this.stopped = true; stats.stops++; } }, addEventListener() {} };
-  return { getTracks: () => [track], getAudioTracks: () => [track] };
+const stats = {
+  stops: 0, captures: 0, preparations: 0, terminations: 0, transcriptions: 0, instructions: 0,
+  disarms: [] as string[], requests: [] as { workspaceId: string; operation: string; input: any }[],
+  pendingPermission: false, pendingArm: false, pendingPrepare: false, pendingTranscript: false, pendingRead: false,
+  failExecute: false, spoken: [] as { text: string; voiceURI?: string }[], speechCancels: 0, navigations: [] as unknown[],
 };
-const media = { getUserMedia: async () => stats.pendingPermission ? new Promise(resolve => { permissionResolve = resolve; }) : stream() };
+let permissionResolve: (() => void) | undefined;
+let armResolve: (() => void) | undefined;
+let prepareResolve: (() => void) | undefined;
+let transcriptResolve: ((value: string) => void) | undefined;
+let readResolve: (() => void) | undefined;
+let progress: ((message: string) => void) | undefined;
+let samples: ((pcm: Float32Array) => void) | undefined;
+let resultText = "<img src=x onerror=alert('bad')> Escaped result";
+const pcm = (length = 8000) => Float32Array.from({ length }, (_, i) => Math.sin(i / 8) * 0.15);
+const media = { getUserMedia: async () => { throw new Error("Fixture capture must use the injected PCM seam"); } };
 Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: media });
-HTMLMediaElement.prototype.play = async () => {};
-HTMLMediaElement.prototype.pause = () => {};
-class FakePeer {
-  connectionState = "new";
-  onconnectionstatechange?: () => void;
-  ontrack?: (event: unknown) => void;
-  addTrack(track: any) { stats.attachedTracks.push(track); }
-  createDataChannel() {
-    lastChannel = { readyState: "connecting", onmessage: undefined, onopen: undefined, onclose: undefined as (() => void) | undefined, send(data: string) { stats.sent.push(JSON.parse(data)); }, close() { this.readyState = "closed"; this.onclose?.(); } };
-    return lastChannel;
-  }
-  async createOffer() { return { type: "offer", sdp: "v=0\r\nfixture-offer\r\n" }; }
-  async setLocalDescription() {}
-  async setRemoteDescription(answer: { sdp: string }) {
-    if (!answer.sdp.endsWith("\r\n")) throw new Error("SDP terminator was trimmed");
-    stats.connections++; lastChannel.readyState = "open"; lastChannel.onopen?.();
-  }
-  close() { this.connectionState = "closed"; }
+const dependencies: LocalRecognitionDependencies = {
+  createRuntime: () => ({
+    async prepare(status) {
+      stats.preparations++; progress = status; status("Loading local pack · fixture 50%");
+      if (stats.pendingPrepare) await new Promise<void>(resolve => { prepareResolve = resolve; });
+    },
+    async transcribe() {
+      stats.transcriptions++;
+      if (stats.pendingTranscript) return new Promise<string>(resolve => { transcriptResolve = resolve; });
+      return "Dictated instruction, never automatic approval";
+    },
+    terminate() { stats.terminations++; },
+  }),
+  async openCapture(_signal, onSamples) {
+    if (!globalThis.isSecureContext || !navigator.mediaDevices?.getUserMedia) throw new Error("Local microphone capture requires HTTPS or device-local localhost");
+    stats.captures++; samples = onSamples;
+    let stopped = false;
+    const capture = { stop() { if (!stopped) { stopped = true; stats.stops++; } } };
+    if (stats.pendingPermission) await new Promise<void>(resolve => { permissionResolve = resolve; });
+    // Intentionally non-cooperative: the real recognizer must fence and stop late captures/results.
+    onSamples(pcm());
+    return capture;
+  },
+};
+// The browser test bundler replaces only the panel's recognizer import with this
+// constructor. Production has no fixture global, factory hook or network bypass.
+class FixtureRecognizer {
+  constructor(callbacks: LocalRecognitionCallbacks) { return LocalRecognizer.createForTest(callbacks, dependencies); }
 }
-Object.defineProperty(globalThis, "RTCPeerConnection", { value: FakePeer });
-let workers: any[] = [];
+export { FixtureRecognizer as LocalRecognizer };
+const voice = (voiceURI: string, localService: boolean, lang = "en-US") => ({ voiceURI, name: voiceURI, localService, lang, default: false }) as SpeechSynthesisVoice;
+let voices = [voice("Local English", true), voice("Remote English", false), voice("Local French", true, "fr-FR")];
+const voiceEvents = new EventTarget();
+let activeUtterance: SpeechSynthesisUtterance | undefined;
+Object.defineProperty(globalThis, "speechSynthesis", { configurable: true, value: {
+  getVoices: () => voices,
+  speak(utterance: SpeechSynthesisUtterance) { activeUtterance = utterance; stats.spoken.push({ text: utterance.text, voiceURI: utterance.voice?.voiceURI }); },
+  cancel() { stats.speechCancels++; },
+  addEventListener: voiceEvents.addEventListener.bind(voiceEvents),
+  removeEventListener: voiceEvents.removeEventListener.bind(voiceEvents),
+} });
+Object.defineProperty(globalThis, "SpeechSynthesisUtterance", { configurable: true, value: class { voice = null; lang = ""; onend = null; onerror = null; constructor(public text: string) {} } });
+const workspaceWorkers = new Map<string, Worker[]>();
 let context: WorkspacePanelContext;
-function makeContext(workspaceId: string) {
+function makeContext(workspaceId: string, sessionId = "catalog-session") {
+  const workers = workspaceWorkers.get(workspaceId) ?? [];
+  workspaceWorkers.set(workspaceId, workers);
   return {
     machine: { id: "local", name: "Test machine", kind: "local" },
     workspace: { id: workspaceId, projectId: "project", path: "/test", label: workspaceId, isMain: true },
-    state: { selectedProject: { id: "project", name: "Test project", path: "/test" }, selectedSession: { id: "catalog-session" } },
+    state: { selectedProject: { id: "project", name: "Test project", path: "/test" }, selectedSession: { id: sessionId } },
     peer: { async request(operation: string, input: any) {
       stats.requests.push({ workspaceId, operation, input });
       switch (operation) {
         case "list": return structuredClone(workers);
-        case "connect": return { sdp: "v=0\r\nfixture-answer\r\n" };
         case "arm": {
+          const token = `fixture-token-${stats.requests.filter(r => r.operation === "arm").length}`;
           if (stats.pendingArm) await new Promise<void>(resolve => { armResolve = resolve; });
-          return { token: "fixture-token", remaining: input.count, expiresAt: Date.now() + 600000 };
+          return { token, remaining: input.count, expiresAt: Date.now() + 600000 };
         }
         case "disarm": stats.disarms.push(workspaceId); return { ok: true };
         case "execute": {
           stats.instructions++;
+          if (stats.failExecute) throw new Error("Uncertain fixture delivery");
           const c = input.command;
-          const w = { id: c.requestId, projectId: "project", workspaceId, sessionId: "exact-session", title: c.title, status: "running", model: c.model ?? "default", text: "", revision: 1, createdAt: "", updatedAt: "" };
-          workers.push(w); return w;
+          if (c.kind === "reply") {
+            const w = workers.find(w => w.id === c.workerId);
+            if (!w || w.revision !== c.expectedRevision) throw new Error("Stale fixture revision");
+            w.revision++; w.status = "running"; return structuredClone(w);
+          }
+          const w: Worker = { id: c.requestId, projectId: "project", workspaceId, sessionId: "exact-session", title: c.title, status: "running", model: c.model ?? "default", text: "", revision: 1, createdAt: "", updatedAt: "" };
+          workers.push(w); return structuredClone(w);
         }
-        case "read": return { ...workers.find(w => w.id === input.workerId), text: "<img src=x onerror=alert('bad')> Escaped result", status: "completed" };
+        case "read": {
+          if (stats.pendingRead) await new Promise<void>(resolve => { readResolve = resolve; });
+          return { ...workers.find(w => w.id === input.workerId), text: resultText, status: "completed" };
+        }
         case "models": return [{ id: "test/model", name: "Test model" }];
-        default: throw new Error("Unknown fixture request");
+        default: throw new Error(`Unknown fixture request: ${operation}`);
       }
     } },
-    navigate: async () => {}, host: { requestRender() {} },
+    navigate: async (target: unknown) => { stats.navigations.push(target); }, host: { requestRender() {} },
   } as unknown as WorkspacePanelContext;
 }
-function mount(workspaceId = "workspace-a") {
-  context = makeContext(workspaceId);
+function mount(workspaceId = "workspace-a", sessionId?: string) {
+  context = makeContext(workspaceId, sessionId);
   render(html`<compn3rd-voice-panel .context=${context}></compn3rd-voice-panel>`, document.body);
 }
 mount();
 (globalThis as any).fixture = {
   stats, mount,
-  event(event: any) { lastChannel.onmessage?.({ data: JSON.stringify(event) }); },
-  resolvePermission() { permissionResolve?.(stream()); },
+  resolvePermission() { stats.pendingPermission = false; permissionResolve?.(); },
   resolveArm() { stats.pendingArm = false; armResolve?.(); },
+  resolvePrepare() { stats.pendingPrepare = false; progress?.("Late pack progress"); prepareResolve?.(); },
+  resolveTranscript(value = "Late canceled transcript") { stats.pendingTranscript = false; transcriptResolve?.(value); },
+  resolveRead() { stats.pendingRead = false; readResolve?.(); },
+  reachLimit() { samples?.(pcm(320000)); },
+  setResult(value: string) { resultText = value; },
+  bumpRevision() { workspaceWorkers.get(context.workspace.id)![0].revision++; },
+  removeLocalVoices() { voices = [voice("Remote English", false)]; voiceEvents.dispatchEvent(new Event("voiceschanged")); },
+  lateSpeechEnd() { activeUtterance?.onend?.({} as SpeechSynthesisEvent); },
   setMediaSupported(supported: boolean) { Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: supported ? media : undefined }); },
   setSecureContext(secure: boolean) { Object.defineProperty(globalThis, "isSecureContext", { configurable: true, value: secure }); },
   setHidden(hidden: boolean) { Object.defineProperty(document, "hidden", { configurable: true, value: hidden }); document.dispatchEvent(new Event("visibilitychange")); },
