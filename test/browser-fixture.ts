@@ -6,6 +6,7 @@ import type { Worker } from "../src/protocol.ts";
 
 const stats = {
   stops: 0, captures: 0, preparations: 0, terminations: 0, transcriptions: 0, instructions: 0,
+  acquisitions: [] as { source: string; bytes?: number }[],
   disarms: [] as string[], requests: [] as { workspaceId: string; operation: string; input: any }[],
   pendingPermission: false, pendingArm: false, pendingPrepare: false, pendingTranscript: false, pendingRead: false,
   failSpeechCancel: false, failExecute: false, spoken: [] as { text: string; voiceURI?: string }[], speechCancels: 0, navigations: [] as unknown[],
@@ -23,7 +24,8 @@ const media = { getUserMedia: async () => { throw new Error("Fixture capture mus
 Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: media });
 const dependencies: LocalRecognitionDependencies = {
   createRuntime: () => ({
-    async prepare(status) {
+    async prepare(status, options = { source: "cache" }) {
+      stats.acquisitions.push({ source: options.source, ...(options.source === "import" ? { bytes: options.file.size } : {}) });
       stats.preparations++; progress = status; status("Loading local pack · fixture 50%");
       if (stats.pendingPrepare) await new Promise<void>(resolve => { prepareResolve = resolve; });
     },

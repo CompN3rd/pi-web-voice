@@ -2,13 +2,14 @@ import { LitElement, html, css } from "lit";
 import type { PiWebPlugin, WorkspacePanelContext, JsonValue } from "@jmfederico/pi-web/plugin-api";
 import { text, MAX_MODEL, type Command, type Lease, type Worker, type ModelOption } from "../protocol.ts";
 import { LocalRecognizer } from "./audio.ts";
+import type { SpeechPreparation } from "./recognition-runtime.ts";
 import { LocalSpeechOutput, SPEECH_CANCELLATION_FAILURE } from "./speech-output.ts";
 
 const scope = (c?: WorkspacePanelContext) => c ? JSON.stringify([c.machine.id, c.workspace.projectId, c.workspace.id, c.state?.selectedSession?.id]) : "";
 const replyEligible = (w: Worker) => ["needs-input", "completed", "failed"].includes(w.status);
 const targetKey = (w: Worker) => `${w.id}:${w.revision}`;
 export class VoicePanel extends LitElement {
-  static properties = { context: { attribute: false }, status: { state: true }, workers: { state: true }, drafts: { state: true }, transcript: { state: true }, taskTitle: { state: true }, model: { state: true }, target: { state: true }, models: { state: true }, detail: { state: true }, error: { state: true }, approving: { state: true }, speechStatus: { state: true }, selectedVoice: { state: true } };
+  static properties = { context: { attribute: false }, status: { state: true }, workers: { state: true }, drafts: { state: true }, transcript: { state: true }, taskTitle: { state: true }, model: { state: true }, target: { state: true }, models: { state: true }, detail: { state: true }, error: { state: true }, approving: { state: true }, speechStatus: { state: true }, selectedVoice: { state: true }, selectedPack: { state: true } };
   context?: WorkspacePanelContext;
   private status = "Microphone off · prepare local speech or type below";
   private workers: Worker[] = [];
@@ -22,6 +23,8 @@ export class VoicePanel extends LitElement {
   private error = "";
   private approving = false;
   private recognizer?: LocalRecognizer;
+  private importScope?: string;
+  private selectedPack?: File;
   private speech?: LocalSpeechOutput;
   private speechCancellationSafe = true;
   private get cancellationSafe() { return this.speech?.cancellationSafe ?? this.speechCancellationSafe; }
@@ -34,7 +37,14 @@ export class VoicePanel extends LitElement {
   private activeContext?: WorkspacePanelContext;
   private refreshing = false;
   private hide = () => {
-    if (document.hidden) { this.shutdown(); this.status = "Page hidden · microphone off; speech stop requested. Workers continue."; }
+    if (document.hidden) {
+      // Android's Files picker may hide the page. Retain only its scoped selection
+      // ticket, never audio/permission authority. Import still needs a fresh tap.
+      const pickerScope = this.importScope;
+      this.shutdown();
+      if (pickerScope === scope(this.context)) this.importScope = pickerScope;
+      this.status = "Page hidden · microphone off; speech stop requested. Workers continue.";
+    }
     else this.requestUpdate();
   };
   static styles = css`
@@ -106,7 +116,7 @@ export class VoicePanel extends LitElement {
   }
   private shutdown() {
     this.revoke(); this.generation++; this.refreshing = false;
-    this.recognizer?.dispose(); this.recognizer = undefined;
+    this.recognizer?.dispose(); this.recognizer = undefined; this.importScope = undefined; this.selectedPack = undefined;
     // Generation fences status callbacks, not the page-global cancellation latch.
     this.speechCancellationSafe = this.speech?.dispose() ?? this.speechCancellationSafe;
     this.speech = undefined; this.selectedVoice = "";
@@ -118,7 +128,7 @@ export class VoicePanel extends LitElement {
   private changeTarget(value: string) { this.shutdown(); this.target = value; this.status = "Target changed · microphone work and drafts discarded. Prepare again or type below."; }
   private changeModel(value: string) { this.shutdown(); this.model = value; this.status = "Model changed · microphone work and drafts discarded. Prepare again or type below."; }
   private get busy() { return !!this.recognizer && ["preparing", "starting", "recording", "transcribing"].includes(this.recognizer.state); }
-  private async prepare() {
+  private async prepare(options: SpeechPreparation = { source: "cache" }) {
     if (!this.cancellationSafe) throw new Error(SPEECH_CANCELLATION_FAILURE);
     if (document.hidden || !this.isConnected || this.busy || this.approving || this.recognizer?.ready) return;
     const generation = this.generation;
@@ -132,7 +142,7 @@ export class VoicePanel extends LitElement {
       },
     });
     this.recognizer?.dispose(); this.recognizer = recognizer;
-    try { await recognizer.prepare(); }
+    try { await recognizer.prepare(options); }
     catch (error) {
       if (this.current(generation) && this.recognizer === recognizer) this.status = "Microphone off · local preparation failed; prepare explicitly to retry.";
       throw error;
@@ -221,12 +231,27 @@ export class VoicePanel extends LitElement {
       <p class="muted">Pixel 8 phone-browser speech · English only. Not driving-validated. Foreground only: hiding, closing, changing context or turning off stops microphone work and requests speech cancellation, not worker cancellation. No cloud speech fallback.</p>
       <section aria-label="Local speech controls">
         <p class="state" role="status">${this.cancellationSafe ? this.status : SPEECH_CANCELLATION_FAILURE}</p>
-        <p>Prepare downloads/checks approximately 65 MB of self-hosted speech assets, plus cache overhead. Uses phone storage, memory and battery. Preparation never opens the microphone. Audio stays transient on this device.</p>
+        <p>Speech needs approximately 65 MB plus cache overhead. Prepare uses verified cached files only. Download explicitly contacts Hugging Face/CDN and jsDelivr without credentials or referrer; these hosts see download metadata, never microphone audio. Or import a matching .pivoice file locally. No additional host routes or paid inference service.</p>
+        <p>All acquisition uses phone storage/memory and never opens the microphone. Missing files fail closed; there is no automatic download or cloud recognition fallback.</p>
         <div class="toolbar">
           <button class="primary" ?disabled=${!this.cancellationSafe || this.approving || this.busy || this.recognizer?.ready} @click=${() => this.run(() => this.prepare())}>Prepare local English speech pack</button>
+          <button ?disabled=${!this.cancellationSafe || this.approving || this.busy || this.recognizer?.ready} @click=${() => this.run(() => this.prepare({ source: "download" }))}>Download pinned English speech pack · ~65 MB</button>
           <button class="primary" aria-pressed=${recording ? "true" : "false"} ?disabled=${!this.cancellationSafe || this.approving || (!recording && !this.recognizer?.ready) || !this.target || (!!worker && !replyEligible(worker))} @click=${() => this.run(() => this.toggleRecording())}>${recording ? "Finish recording" : "Start recording"}</button>
           <button class="danger" @click=${() => this.shutdown()}>Cancel / voice off</button>
         </div>
+        <label>Import local speech pack (.pivoice)<input type="file" accept=".pivoice" ?disabled=${!this.cancellationSafe || this.approving || this.busy || this.recognizer?.ready}
+          @click=${() => { this.importScope = scope(this.context); this.selectedPack = undefined; }}
+          @change=${(event: Event) => {
+            const input = event.target as HTMLInputElement;
+            const file = input.files?.[0]; input.value = "";
+            const selectionScope = this.importScope; this.importScope = undefined;
+            if (file && this.isConnected && selectionScope === scope(this.context) && this.lastScope === selectionScope) this.selectedPack = file;
+          }}></label>
+        ${this.selectedPack ? html`<p>Selected ${this.selectedPack.name} (${this.selectedPack.size.toLocaleString()} bytes). Selecting a file has not imported it.</p>
+          <button ?disabled=${!this.cancellationSafe || this.approving || this.busy || this.recognizer?.ready} @click=${() => {
+            const file = this.selectedPack; this.selectedPack = undefined;
+            if (file) this.run(() => this.prepare({ source: "import", file }));
+          }}>Import selected speech pack</button>` : ""}
         <p>Maximum 20 seconds per recording. Finish only creates an untrusted, editable draft; it never sends an instruction. Cancel requires explicit preparation again.</p>
       </section>
       <section aria-label="Exact instruction">

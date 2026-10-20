@@ -52,6 +52,60 @@ try {
   };
   const unchangedDraft = async () => { assert.equal(await prompt().inputValue(), ""); assert.equal(await page.getByRole("article", { name: "Exact proposal" }).count(), 0); checks++; };
 
+  // Acquisition authority is explicit; preparation/import/download never capture or dispatch.
+  await reset(); await prepare();
+  assert.deepEqual(await page.evaluate(() => fixture.stats.acquisitions), [{ source: "cache" }]);
+  assert.equal(await page.evaluate(() => fixture.stats.captures + fixture.stats.instructions), 0); checks++;
+  await reset();
+  await button("Download pinned English speech pack · ~65 MB").click();
+  await page.getByText("Local speech ready · audio stays on this device", { exact: true }).waitFor();
+  assert.deepEqual(await page.evaluate(() => fixture.stats.acquisitions), [{ source: "download" }]);
+  assert.equal(await page.evaluate(() => fixture.stats.captures + fixture.stats.instructions), 0); checks++;
+  const choosePack = async () => {
+    const picking = page.waitForEvent("filechooser");
+    await page.getByLabel("Import local speech pack (.pivoice)", { exact: true }).click();
+    return picking;
+  };
+  const fixturePack = { name: "fixture.pivoice", mimeType: "application/octet-stream", buffer: Buffer.from("PIVOICE1") };
+  await reset();
+  await (await choosePack()).setFiles(fixturePack);
+  assert.deepEqual(await page.evaluate(() => fixture.stats.acquisitions), []);
+  await button("Import selected speech pack").click();
+  await page.getByText("Local speech ready · audio stays on this device", { exact: true }).waitFor();
+  assert.deepEqual(await page.evaluate(() => fixture.stats.acquisitions), [{ source: "import", bytes: 8 }]);
+  assert.equal(await page.evaluate(() => fixture.stats.captures + fixture.stats.instructions), 0); checks++;
+  await reset();
+  const stalePicker = await choosePack();
+  await page.evaluate(() => fixture.mount("workspace-b"));
+  await page.getByText("Test machine / Test project / workspace-b", { exact: true }).waitFor();
+  await stalePicker.setFiles(fixturePack);
+  await page.evaluate(() => document.querySelector("compn3rd-voice-panel").updateComplete);
+  assert.deepEqual(await page.evaluate(() => fixture.stats.acquisitions), []);
+  assert.equal(await button("Import selected speech pack").count(), 0); checks++;
+  // Android may hide the page while its native file picker is open. Selection is
+  // retained for this context, but no import happens until a fresh visible tap.
+  await reset();
+  const mobilePicker = await choosePack();
+  await page.evaluate(() => fixture.setHidden(true));
+  await mobilePicker.setFiles(fixturePack);
+  assert.deepEqual(await page.evaluate(() => fixture.stats.acquisitions), []);
+  await page.evaluate(() => fixture.setHidden(false));
+  await button("Import selected speech pack").click();
+  await page.getByText("Local speech ready · audio stays on this device", { exact: true }).waitFor();
+  assert.deepEqual(await page.evaluate(() => fixture.stats.acquisitions), [{ source: "import", bytes: 8 }]);
+  assert.equal(await page.evaluate(() => fixture.stats.captures), 0); checks++;
+  for (const source of ["download", "import"]) {
+    await reset(); await page.evaluate(() => { fixture.stats.pendingPrepare = true; });
+    if (source === "download") await button("Download pinned English speech pack · ~65 MB").click();
+    else { await (await choosePack()).setFiles(fixturePack); await button("Import selected speech pack").click(); }
+    await page.waitForFunction(() => fixture.stats.preparations === 1);
+    await button("Cancel / voice off").click();
+    await page.evaluate(() => fixture.resolvePrepare());
+    await page.evaluate(() => document.querySelector("compn3rd-voice-panel").updateComplete);
+    assert.equal(await button("Start recording").isEnabled(), false);
+    assert.equal(await page.evaluate(() => fixture.stats.captures + fixture.stats.instructions), 0); checks++;
+  }
+
   // Text-only manual approval and exact payload, full escaped text, navigation/catalog.
   await reset();
   assert.equal(await page.evaluate(() => fixture.stats.captures + fixture.stats.preparations), 0);

@@ -4,7 +4,7 @@
 
 The owner rejected the custom `/pi-voice-speech/` deployment requirement. [ADR 0001](adr/0001-browser-owned-speech-pack-acquisition.md) replaces it with browser-owned verified cache, explicit pinned public download and local portable-file import. The records below describe the earlier route-based implementation until superseded by the route-free verification results recorded here.
 
-Parent source probes found CORS headers on the fixed Hugging Face config/model and jsDelivr runtime URLs. The model request redirects to a Hugging Face CDN; runtime Content-Length can describe compressed bytes and is not the verified decoded size. These HEAD probes are **not** proof of a successful browser download or inference. No inference-provider request was made.
+The parent first probed public headers, then performed actual CORS downloads of all ten pinned model/runtime assets in installed desktop Edge from a loopback page, with `credentials: omit` and `referrerPolicy: no-referrer`. Every decoded byte length and SHA-256 matched the compiled manifest. Final origins were `https://huggingface.co`, `https://us.aws.cdn.hf.co` and `https://cdn.jsdelivr.net`. No signed CDN query URLs were retained in the report. This is current public-distribution/browser evidence, **not** acceptance of a live Pi host's CSP or a Pixel device. No inference-provider request was made. Runtime HTTP Content-Length can represent compressed bytes; decoded bytes are authoritative.
 
 Implementation, integration and independent review are in progress. Live-host/Pixel acceptance remains unperformed.
 
