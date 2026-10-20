@@ -6,7 +6,19 @@ The owner replaced the paid Realtime architecture with phone-browser-local speec
 
 Before this redesign, the parent reran `npm run verify` (33 tests, typecheck/build passed) and `npm run test:browser` (17 fake checks passed). The replacement removes the provider setup endpoint and API-key requirement, introduces local speech modules, and retains worker admission/companion contracts. A new server regression confirms obsolete `connect` and audio-upload operations reject without fetching while text list/approval operations remain available.
 
-Integrated baseline `12991ee` and XHR fix `46e0ebe`: strict typecheck/build and **66 unit/contract tests**, **69 browser fixture checks**, and **three actual-ORT browser runtime scenarios** passed in the implementation lanes. Final post-review counts and package checks are recorded below when complete.
+### Final integrated verification
+
+The parent ran the following against integrated source `6188e71` (subsequent documentation-only edits do not alter runtime behavior):
+
+| Check | Result | Evidence boundary |
+| --- | --- | --- |
+| `npm run verify` | Passed: strict typecheck, **69 unit/contract + 7 deployment tests**, production build | Fake contracts and deterministic asset/package tests |
+| `npm run test:browser` | **85 checks passed** | Installed Edge, 390px viewport, real recognizer state machine with fake PCM/runtime/synthesis/host; intercepted networking |
+| `npm run test:runtime` | **3 scenarios passed** | Actual pinned ORT glue/WASM: cached success, post-verification eviction, same-size corruption; native XHR zero throughout; instantiations 1/0/0 |
+| `npm run check:package` | Passed; **16 files, approximately 2.24 MB uncompressed**, below 16,777,216 bytes | Dry-run npm artifact total, no model/WASM payload; not installed-host acceptance |
+| `npm run test:model -- --output <external pack>` | Passed; 10 verified inference assets, synthetic PCM inference **1,805 ms**, zero further HTTP attempts/requests | Actual desktop Edge q8 pipeline, not accuracy or Pixel evidence |
+
+The smoke used `C:/Users/Wizar/AppData/Local/Temp/pi-voice-speech-assets-46e0ebe` (15 files, 65,196,193 bytes including notices). The parent then re-provisioned it without network from verified source files to **`C:/Users/Wizar/Documents/projects/pi-web-voice-speech-assets`**, outside the plugin root. This is retained local storage, **not a deployed static endpoint**. The build removes obsolete generated speech payloads from the plugin browser directory; the external pack is retained.
 
 The parent explicitly provisioned the pinned public model pack (no inference service) and ran the full production Transformers/Whisper pipeline in desktop Edge from nested plugin URLs. With subsequent HTTP blocked, one second of synthetic sine PCM produced `[Music]` and zero further HTTP requests. Observed desktop inference took about 1.3 seconds on the first run and 3.2 seconds in a later implementation-lane rerun. This is runtime evidence, **not speech accuracy or Pixel latency evidence**; the noise transcription reinforces the need for transcript approval.
 
@@ -24,8 +36,8 @@ No real Pixel 8, actual microphone, Android local-voice, live-host installation 
 ### Independent review and remediation
 
 - Runtime review found a P1: actual ONNX glue could fall back from guarded fetch to unrestricted XHR. `46e0ebe` denies XHR in the dedicated worker. The actual-glue regression covers cached success, post-verification eviction and same-size corruption; a negative control against the old worker detected the fallback. Default runtime checks do not require model weights.
-- Panel review found a P1: recreating the output wrapper could forget failed OS cancellation, permitting capture while playback remained uncertain. A P2 also identified a fake successful reply to a running worker, contrary to the real backend. Both were accepted for remediation and independent re-review.
-- Parent packaging inspection identified the pinned host's 16 MiB total plugin artifact limit. Speech files are being separated into an explicitly hosted static pack rather than bypassing the host's public API boundary.
+- Panel review found a P1: recreating the output wrapper could forget failed OS cancellation, permitting capture while playback remained uncertain. A P2 also identified a fake successful reply to a running worker, contrary to the real backend. `6188e71` adds a page-synthesis-keyed failure latch, structured safety checks and lifecycle regressions, and corrects the fixture/UI settled-status requirement. Independent focused re-review returned **“No issues found” / “Merge verdict: OK.”**
+- Parent packaging inspection identified the pinned host's 16 MiB total plugin artifact limit. `c578cb3` separates speech files into an explicitly hosted static pack and adds browser/package size gates, safe external provisioning and a full-model smoke test rather than bypassing the host's public API boundary. Independent runtime/deployment re-review returned **“No issues found” / “Merge verdict: OK.”** Both final reviews inspected source and tests; the parent separately executed all listed validation commands. All accepted review findings are closed.
 
 ### Dependency and license release gates
 
