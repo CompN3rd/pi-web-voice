@@ -39,7 +39,10 @@
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test test/*.test.ts",
     "verify": "npm run typecheck && npm test && npm run build",
-    "test:browser": "node test/browser.mjs"
+    "test:browser": "node test/browser.mjs",
+    "build:speech": "node scripts/build.mjs --speech-only",
+    "speech:provision": "node scripts/provision-speech-pack.mjs",
+    "test:speech": "node --import tsx --test test/recognition-*.test.ts"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
@@ -47,6 +50,7 @@
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "1.2.0",
+    "@huggingface/transformers": "3.8.1",
     "@jmfederico/pi-web": "1.202610.3",
     "@types/node": "24.19.2",
     "esbuild": "0.28.2",
