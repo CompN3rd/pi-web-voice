@@ -1,5 +1,24 @@
 # Validation and delivery record
 
+## Browser-local redesign — current work
+
+The owner replaced the paid Realtime architecture with phone-browser-local speech targeting Google Pixel 8. The historical record below describes the **retired Realtime prototype**, not acceptance of the redesigned speech runtime.
+
+Before this redesign, the parent reran `npm run verify` (33 tests, typecheck/build passed) and `npm run test:browser` (17 fake checks passed). The replacement removes the provider setup endpoint and API-key requirement, introduces local speech modules, and retains worker admission/companion contracts. A new server regression confirms obsolete `connect` and audio-upload operations reject without fetching while text list/approval operations remain available.
+
+Final redesign test counts, asset checks and review findings will be recorded after integration. No real Pixel 8, model inference, Android local-voice, live-host installation or privacy acceptance has yet been performed. No paid provider calls or live daemon operations are authorized by the redesign.
+
+### New acceptance gates
+
+1. Explicit speech-pack provisioning with pinned artifact integrity/provenance; matching local runtime assets and deployed plugin-relative URLs.
+2. Actual Whisper inference on the Pixel 8, including model preparation, short English commands, silence/noise, accuracy, latency, memory and thermal behavior.
+3. Speech-only offline readiness after preparation, missing/evicted cache behavior and proof that microphone samples never leave the browser.
+4. Local voice enumeration/selection, airplane-mode playback and device-level traffic inspection; browser mocks cannot attest Android system TTS.
+5. Permission denial/revocation, stop/off during permission/preparation/inference, page hide, scope switch, repeated recording, headset routes and browser lifecycle.
+6. One harmless approved new task and exact follow-up against an isolated real Pi Web instance. No retry of unknown delivery.
+
+## Historical Realtime prototype record (superseded architecture)
+
 ## Local environment and scope
 
 - Date: 2026-10-20.

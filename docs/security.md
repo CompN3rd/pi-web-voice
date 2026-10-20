@@ -1,54 +1,51 @@
-# Security, privacy and operating boundary
+# Security and privacy boundary
 
 ## Trust model
 
-Pi Web and its plugins run trusted code, with the daemon account's filesystem/process permissions. Use a private network/VPN/SSH tunnel or an authenticated HTTPS reverse proxy; do not expose the Pi Web host directly to the public internet. The package peer inherits host routing and deployment access controls. It **does not add a user-login/CSRF system**, and model-provider OAuth is not browser-user authentication.
+Pi Web plugins and ordinary workers run trusted code with normal daemon/agent permissions. Use authenticated HTTPS and a trusted private/VPN deployment; the plugin adds no separate browser-user authentication. A phone visiting plain LAN HTTP does not get the desktop localhost microphone exception.
 
-The voice plugin does not use private session HTTP routes, provider credential stores or the host's database. One administrative project-registration request was made during development to add the new repository; that operation is not embedded in the plugin runtime.
-
-## Authority
-
-- Voice tools are allowlisted and cannot mint their own allowance, select arbitrary filesystem paths or run a shell directly.
-- Without an allowance, task proposals stay in the browser until their exact text is approved.
-- A human can explicitly arm one manually approved instruction, or up to three instructions for ten minutes. Tokens are server-generated, workspace-scoped, held in browser memory and never passed as model tool results. Follow-ups spend an instruction too.
-- The allowance is **broad delegation within that workspace**, not semantic verification of a spoken command. Another speaker or prompt-injected model might use it. The resulting ordinary Pi agent can edit/run commands according to its normal tools and permissions. Use default individual approvals for sensitive work.
-- Allowances live only in backend memory and expire on daemon restart. One current allowance exists per workspace; another tab can replace/revoke it. Mute/disconnect/scope change attempts revocation and clears the local token. Transport loss can prevent remote revocation, so the expiry/count limit remains the backstop.
-- Explicit prompts in worker results are data, not authority. Notification generation uses no tools and only status/IDs. Reading full results is opt-in, but instruction-following by the model is not a security boundary. Do not treat prompt wording as a guarantee against injection.
+Use only pinned public Pi Web package entrypoints. Do not read private host databases, scrape provider credentials, or expose arbitrary session routes. Local speech does not sandbox a coding worker.
 
 ## Data flows
 
 | Data | Destination/storage |
 | --- | --- |
-| Captured microphone audio while active | OpenAI via browser WebRTC |
-| Muted microphone | Track disabled; captured samples are not transmitted, connection may remain alive |
-| Audio output | OpenAI → browser speaker |
-| Long-lived OpenAI API key | Session-daemon environment → fixed HTTPS OpenAI session endpoint only |
-| SDP | Browser ↔ backend ↔ OpenAI; not logged by plugin |
-| Task text | Normal Pi worker conversation/provider |
-| Worker status/IDs | Browser; minimal spoken alerts via OpenAI while connected |
-| Bounded worker text/question | Backend ledger/browser; sent to OpenAI only through requested voice read or an instruction receipt returning that state |
-| Thinking/tool payloads | Not exported by companion |
-| Raw audio files | Not created by plugin |
+| Microphone samples | Phone browser memory and local recognition worker only |
+| Speech models/runtime | Deployment → phone, during explicit preparation; model cache is not audio storage |
+| Unapproved transcript | Editable browser state; not a worker instruction yet |
+| Approved instruction | Pi Web ledger/admission and ordinary Pi conversation/provider |
+| Worker metadata | Scoped backend ledger and browser |
+| Bounded final result/question | Scoped backend ledger/browser; optional explicitly selected local TTS voice |
+| Raw audio recordings | Not persisted or uploaded by the plugin |
+| Provider credentials | Not accessed by the speech layer; ordinary Pi workers retain their existing auth |
+| Thinking/raw tool payloads | Not exported by the companion |
 
-Provider retention, region, training and zero-data-retention eligibility are account/endpoint/contract matters. See [OpenAI data controls](https://developers.openai.com/api/docs/guides/your-data). This project makes no universal no-retention/no-training claim. The selected text worker provider has its own policies. Human transcripts are not separately generated for UI/audit; the exact delegated text—not an assumed perfect transcript—is the meaningful approval artifact.
+No paid speech endpoint, native cloud-backed browser recognition, or silent cloud fallback is permitted. Browser model loading must be self-hosted and constrained; do not confuse remote model-file downloads with remote inference. Offline speech readiness and full offline Pi operation are different claims.
+
+Browser speech synthesis is restricted to explicitly selected voices with `localService === true`, checked again at playback. Missing/changed/remote voices fail to text. That flag is not proof about all Android engine networking; verify actual device behavior in airplane mode and with device-level traffic observation. Browser request interception cannot inspect OS service traffic.
+
+## Authority
+
+- Recognition produces editable text, never an automatically dispatched command.
+- A new task or exact follow-up target/revision is chosen explicitly. The user approves exact text/model/target on screen.
+- Speech modules have no backend authority. Worker results are data, not instructions to the voice UI.
+- Server-issued instruction allowances remain workspace-scoped and bounded. The UI uses per-instruction approval. Pending grants are fenced by context generation and permission epoch; stale grants are revoked by exact token.
+- Hide, disconnect/off, unmount and context changes cancel capture/inference/playback, clear stale state and revoke old-context authority. Remote revocation may fail after transport loss; backend expiry/count limits remain the backstop.
+- Microphone permission is not dispatch permission. End recording is not approval. A recognized “yes” is not approval.
+- Ordinary workers may edit files/run tools under their existing permissions. `completed` means final settlement, not independently verified success.
 
 ## Failure handling
 
-- No automatic mutation retries or reconnect loops. Same request ID + same payload returns its prior admission; changed payload is rejected.
-- Disk errors block further admission. Session and companion persistence are separate, so cross-process exactly-once guarantees are not claimed.
-- Ordinary Pi `sendUserMessage` is fire-and-forget. A 15-second watchdog marks unobserved start as unknown without retry. A task can still appear later; inspect before creating replacement work.
-- Lost tracking, unrelated prompts, or branch navigation invalidate worker attribution. Follow-ups need both the current ledger revision and exact companion sequence/status.
-- Reopening/refreshing reconciles only hosted sessions. It does not silently load arbitrary session files or start saved work.
-- Closing voice does not abort work. There is no generic cancel/delete tool in this prototype.
-- WebRTC startup times out after 30 seconds; provider SDP setup is bounded to 8 seconds; voice connections end after 25 minutes. The server limits setup attempts to four per minute per plugin activation. These are simple abuse/cost guardrails, not a monetary spending cap or per-user quota.
-- Backend-owned dispatch admission and final persistence are drained at disposal. Published sessions belong to the user and are not discarded.
+Audio is bounded and memory-only. Finishing/canceling capture releases microphone tracks; pending permission and recognition results must not resurrect old state. Text remains available after unsupported capabilities, missing assets, local inference errors or unavailable voices. No automatic remote fallback.
 
-## Before real use
+Mutating worker requests are never automatically retried. Durable request IDs and payload hashes deduplicate accepted work; changed payloads reject. Admission precedes session creation, session identity precedes kickoff. Disk failure blocks further admission. There is no transaction spanning host publication and plugin persistence: a crash can leave an unrecorded published session, so uncertain outcomes require inspection.
 
-1. Review exact package contents and install only the companion/plugin you trust.
-2. Keep secrets out of `.pi-web` project configuration, browser storage, source files, logs and model prompts.
-3. Confirm HTTPS, authenticated/private access, origin policy and microphone permission on the actual device.
-4. Set provider account usage limits/alerts; connected voice usage and worker usage are separate costs. UI has no reliable token-to-currency accounting yet.
-5. Test a harmless task without file edits. Inspect the exact conversation and compare spoken claims with the real result.
-6. Test backgrounding, lock, Bluetooth route changes, weak network, competing browser tabs, pending questions and failed provider billing while parked.
-7. Do not depend on this for safety-critical interaction or operate its setup/debugging screens while driving.
+Companion sequence and backend revision fences reject stale replies. Branch changes/unrelated prompts invalidate attribution. Backend restart marks records unknown until a hosted companion can reconcile. No saved session is silently resumed. A delivery watchdog may mark a slow start unknown even if it subsequently runs; never retry merely because it is unknown.
+
+Stopping speech/closing the panel does not cancel user-owned workers. Generic Pi dialogs and permissions must be handled in the regular conversation UI.
+
+## Release and device gates
+
+Keep the package private/experimental. Do not install/activate it or restart a live daemon without explicit authorization; restart interrupts active sessions and terminals. Test using an isolated instance first.
+
+Required real-device checks include HTTPS/CSP and asset loading, permission denied/revoked, microphone indicators after cancel, delayed permission, browser hide/lock, memory pressure, cache eviction, weak networks, Bluetooth/headsets, silence/noise/hallucinations and local TTS behavior. Fake browser tests are not device/privacy acceptance. Do not rely on this for safety-critical or driving interaction.

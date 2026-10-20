@@ -1,7 +1,6 @@
 import { PI_WEB_HOST_PI_SESSIONS_CAPABILITY, PI_WEB_HOST_PI_SESSION_EVENTS_CAPABILITY } from "@jmfederico/pi-web/server-plugin-api";
 import type { PiWebServerPlugin, JsonValue } from "@jmfederico/pi-web/server-plugin-api";
 import { record } from "./protocol.ts";
-import { exchangeSdp } from "./realtime.ts";
 import { VoiceService } from "./server/service.ts";
 import { Store } from "./server/store.ts";
 
@@ -10,7 +9,6 @@ export default {
   requires: [PI_WEB_HOST_PI_SESSIONS_CAPABILITY, PI_WEB_HOST_PI_SESSION_EVENTS_CAPABILITY],
   activate(host) {
     let service: VoiceService | undefined;
-    let attempts: number[] = [];
     return {
       start({ capabilities }) { service = new VoiceService(new Store(host.dataDirectory), capabilities.resolve(PI_WEB_HOST_PI_SESSIONS_CAPABILITY), capabilities.resolve(PI_WEB_HOST_PI_SESSION_EVENTS_CAPABILITY), host.lifetimeSignal); },
       peer: { async request(context) {
@@ -19,12 +17,6 @@ export default {
         const scope = { projectId: context.project.id, workspaceId: context.workspace.id };
         let result: unknown;
         switch (context.operation) {
-          case "connect": {
-            attempts = attempts.filter(t => t > Date.now() - 60_000);
-            if (attempts.length >= 4) throw new Error("Voice connection limit: wait a minute before reconnecting");
-            attempts.push(Date.now());
-            result = await exchangeSdp(context.input, host.settings, AbortSignal.any([context.signal, host.lifetimeSignal])); break;
-          }
           case "list": {
             const workers = await service.list(scope);
             // List metadata only: full results are opt-in, individually bounded reads.
