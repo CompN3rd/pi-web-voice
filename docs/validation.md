@@ -1,5 +1,13 @@
 # Validation and delivery record
 
+## Route-free acquisition revision (ADR 0001)
+
+The owner rejected the custom `/pi-voice-speech/` deployment requirement. [ADR 0001](adr/0001-browser-owned-speech-pack-acquisition.md) replaces it with browser-owned verified cache, explicit pinned public download and local portable-file import. The records below describe the earlier route-based implementation until superseded by the route-free verification results recorded here.
+
+Parent source probes found CORS headers on the fixed Hugging Face config/model and jsDelivr runtime URLs. The model request redirects to a Hugging Face CDN; runtime Content-Length can describe compressed bytes and is not the verified decoded size. These HEAD probes are **not** proof of a successful browser download or inference. No inference-provider request was made.
+
+Implementation, integration and independent review are in progress. Live-host/Pixel acceptance remains unperformed.
+
 ## Browser-local redesign — current work
 
 The owner replaced the paid Realtime architecture with phone-browser-local speech targeting Google Pixel 8. The historical record below describes the **retired Realtime prototype**, not acceptance of the redesigned speech runtime.

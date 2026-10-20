@@ -11,7 +11,8 @@ Use only pinned public Pi Web package entrypoints. Do not read private host data
 | Data | Destination/storage |
 | --- | --- |
 | Microphone samples | Phone browser memory and local recognition worker only |
-| Speech models/runtime | Deployment → phone, during explicit preparation; model cache is not audio storage |
+| Speech models/runtime | Explicit pinned public download or local file import → verified browser cache; cached preparation has no download |
+| Download metadata | Hugging Face/CDN and jsDelivr see ordinary request metadata only after explicit download; credentials/referrer omitted |
 | Unapproved transcript | Editable browser state; not a worker instruction yet |
 | Approved instruction | Pi Web ledger/admission and ordinary Pi conversation/provider |
 | Worker metadata | Scoped backend ledger and browser |
@@ -20,7 +21,9 @@ Use only pinned public Pi Web package entrypoints. Do not read private host data
 | Provider credentials | Not accessed by the speech layer; ordinary Pi workers retain their existing auth |
 | Thinking/raw tool payloads | Not exported by the companion |
 
-No paid speech endpoint, native cloud-backed browser recognition, or silent cloud fallback is permitted. Browser model loading must be self-hosted and constrained; do not confuse remote model-file downloads with remote inference. The large speech pack is served separately at the explicitly configured same-origin `/pi-voice-speech/` static path, outside the size-limited plugin package. Assets are byte/hash checked, redirects are rejected, inference fetch is cache-only, and the dedicated worker denies XMLHttpRequest to block the runtime's alternate loader. Offline speech readiness and full offline Pi operation are different claims.
+No paid speech endpoint, native cloud-backed browser recognition, or silent cloud fallback is permitted. No custom host routes are required. The user explicitly chooses cached preparation, pinned public download, or `.pivoice` file import. Cached preparation/import cannot silently fetch missing files. Download requests carry no microphone samples, transcripts, worker data, authentication or referrer. Public distributors may redirect; initial sources and accepted final HTTPS distribution hosts are constrained, but browser Fetch cannot attest every redirect hop. Hash/decoded-length verification—not CDN trust alone—gates asset use. Imported files cannot replace the compiled manifest or supply arbitrary paths/code versions. See [ADR 0001](adr/0001-browser-owned-speech-pack-acquisition.md).
+
+Runtime URLs are internal cache keys, not real host routes. Inference fetch is cache-only; the dedicated worker denies XMLHttpRequest to block the runtime's alternate loader. Only verified module bytes become executable blob imports. Offline speech readiness and full offline Pi operation are different claims.
 
 Browser speech synthesis is restricted to explicitly selected voices with `localService === true`, checked again at playback. Missing/changed/remote voices fail to text. If the OS/browser cancellation call throws, a page-level safety latch blocks further playback and microphone capture across wrapper recreation, context changes and remounts. The UI warns that audio may still be playing; page reload is the explicit recovery boundary. A new wrapper is not evidence that playback stopped. That flag is not proof about all Android engine networking; verify actual device behavior in airplane mode and with device-level traffic observation. Browser request interception cannot inspect OS service traffic.
 

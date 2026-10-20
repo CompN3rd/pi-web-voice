@@ -17,7 +17,7 @@ Phone speaker ← selected local device voice ← result / saved question
 ```
 
 - English-only quantized Whisper tiny.en is the initial recognition model, using a browser WASM worker. No Ollama server is needed.
-- Speech assets are self-hosted by the deployment and prepared explicitly. Model/runtime downloads require bandwidth and storage; local computation uses phone battery/memory.
+- Speech assets are acquired explicitly by the browser: verified cache, pinned public download, or local `.pivoice` file import. No additional host route or inference service is required. Downloads need bandwidth/storage; local computation uses phone battery/memory.
 - Only explicitly selected browser/OS voices marked local are eligible for playback. No local voice means text-only output. The OS locality flag still needs real Pixel offline/network testing.
 - Recognition produces text, not autonomous tool calls. Choose a new task or exact worker follow-up and approve the exact instruction before it leaves the browser for dispatch.
 - Microphone audio is transient: it is not uploaded to Pi Web/an inference provider or persisted by the plugin.
@@ -58,13 +58,13 @@ npm run test:runtime
 
 `test:runtime` exercises the actual pinned ONNX glue/WASM, including cache eviction/corruption and refusal of its XHR fallback. It does not download model weights or establish transcription accuracy.
 
-### Speech pack and hosting
+### Speech pack: no custom host routes
 
-Pi Web's pinned plugin-artifact limit is **16 MiB**. The approximately **65 MB speech pack must be hosted separately from the plugin package**, under the same HTTPS origin at `/pi-voice-speech/`. This is a static path configured by the deployment operator, not a built-in/private Pi Web endpoint. The browser performs inference; the server only serves model/runtime files.
+Pi Web's pinned plugin-artifact limit is **16 MiB**, so the approximately **65 MB speech pack** is acquired by the phone, not bundled in the plugin. Choose **cached preparation**, an **explicit pinned public download**, or **import a `.pivoice` file** from the phone's files. No reverse-proxy mapping or additional server route is required.
 
-Provisioning is explicit and verifies pinned file sizes and SHA-256 hashes. Use an output directory outside the checkout/package root. See [deployment](docs/deployment.md) for the exact commands, static mapping, package checks and optional full-model smoke test. A passing fake fixture does not provision a usable deployment.
+Downloads contact Hugging Face/CDN and jsDelivr for software files—not an inference API—and omit credentials/referrer. Import offers a no-distribution-network alternative when direct downloads are blocked. Every file is checked against compiled byte lengths and SHA-256 hashes before use. Cached preparation and import never silently download missing files.
 
-Preparation downloads/checks assets into browser Cache Storage. Inference is cache-only; evicted or corrupted files fail closed. Browser storage can be evicted and the host shell itself is not made offline. No service worker or background recording is installed.
+Inference is cache-only; evicted/corrupted assets fail closed. Browser storage can be evicted and the host shell itself is not made offline. No service worker or background recording is installed. See [ADR 0001](docs/adr/0001-browser-owned-speech-pack-acquisition.md) and [installation/pack instructions](docs/deployment.md).
 
 ## Installation boundary
 

@@ -20,13 +20,13 @@ Phone text display ← bounded result/question ← companion settlement
 Browser/OS voice marked local → phone speaker
 ```
 
-The phone downloads application/runtime/model assets from the deployment. Approved task text goes to Pi Web and the worker's configured provider. Audio does not go to the Pi Web backend or an inference service. Local speech does **not** make text workers offline or change their provider billing/limits.
+The phone loads application code from Pi Web and acquires speech assets through verified cache, explicit pinned public downloads or local file import; see [ADR 0001](adr/0001-browser-owned-speech-pack-acquisition.md). Approved task text goes to Pi Web and the worker's configured provider. Audio does not go to the Pi Web backend or an inference service. Local speech does **not** make text workers offline or change their provider billing/limits.
 
 ## Recognition
 
 Use `@huggingface/transformers@3.8.1` and quantized `onnx-community/whisper-tiny.en` in a dedicated Web Worker, with the matching ONNX runtime assets. WASM single-thread inference avoids assuming cross-origin isolation or Android WebGPU compatibility. English is the first supported language; do not label this multilingual.
 
-- Self-host fixed model/runtime assets; no CDN imports or browser remote-model fallback.
+- Explicitly download pinned model/runtime files or import a matching local pack. Never directly execute unchecked CDN imports; verify bytes before blob-module loading. No remote inference fallback.
 - Explicit preparation before microphone activation, with visible download/loading state.
 - Bounded push-to-talk/explicit end-utterance capture; actual sample-rate conversion to mono 16 kHz float PCM.
 - Release microphone tracks before inference; cancel/hide/context change discards pending audio/results.
@@ -66,7 +66,7 @@ The text backend retains its existing scoped allowance protocol for compatibilit
 
 ## Packaging and compatibility
 
-Retain public browser API 4 / server API 3 for Pi Web `1.202610.3`, and companion `1.2.0`. Do not use private session routes, provider credential stores or API5 examples. Keep the package private and disabled by default. Model provisioning is an explicit developer/operator step, not an install lifecycle hook. Worker/worklet JavaScript resolves relative to the plugin's served browser directory. The pinned host limits the entire plugin artifact to 16 MiB, so the approximately 65 MB model/runtime pack is served separately at the explicit same-origin static path `/pi-voice-speech/`. This path must be configured by the deployment operator; it is not a host API or private route. Do not place pack assets inside the plugin root. See `deployment.md`.
+Retain public browser API 4 / server API 3 for Pi Web `1.202610.3`, and companion `1.2.0`. Do not use private session routes, provider credential stores or API5 examples. Keep the package private and disabled by default. Worker/worklet JavaScript resolves relative to the plugin's served browser directory. The pinned host limits the entire plugin artifact to 16 MiB, so the approximately 65 MB model/runtime pack is acquired directly by the browser, through explicit pinned download or verified file import. No custom host route or reverse-proxy mapping is required. Developer provisioning/export is optional and never an install lifecycle hook. Synthetic runtime cache URLs are internal keys only, not fetched routes. Keep large source/export files outside installed plugin roots. See `deployment.md` and ADR 0001.
 
 Converted-model license labels differ across upstream/model cards; retain provenance and license notices and resolve redistribution requirements before release. A local build/prototype is not release approval.
 
