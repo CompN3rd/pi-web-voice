@@ -33,6 +33,7 @@ Use `@huggingface/transformers@3.8.1` and quantized `onnx-community/whisper-tiny
 - No raw audio storage, upload, or diagnostic recording.
 - Silence filtering reduces—not eliminates—Whisper hallucinations. Every transcript is editable and requires explicit approval before dispatch.
 - Missing assets, initialization failures, memory pressure, or unsupported browser capability leave text input available. They must not switch to cloud recognition.
+- The dedicated worker denies XMLHttpRequest, including ONNX Runtime's synchronous fallback; verified cache-only fetch must not be bypassed on loading errors.
 
 The q8 encoder and merged decoder weights total approximately 40.84 MB, excluding tokenizer, runtime, JavaScript and cache overhead. This is not a RAM estimate. Pixel 8 inference time, heat, battery and memory behavior are unmeasured.
 
@@ -65,7 +66,7 @@ The text backend retains its existing scoped allowance protocol for compatibilit
 
 ## Packaging and compatibility
 
-Retain public browser API 4 / server API 3 for Pi Web `1.202610.3`, and companion `1.2.0`. Do not use private session routes, provider credential stores or API5 examples. Keep the package private and disabled by default. Model provisioning is an explicit developer/operator step, not an install lifecycle hook. Runtime and model assets must resolve relative to the plugin's served browser directory, not an assumed host root.
+Retain public browser API 4 / server API 3 for Pi Web `1.202610.3`, and companion `1.2.0`. Do not use private session routes, provider credential stores or API5 examples. Keep the package private and disabled by default. Model provisioning is an explicit developer/operator step, not an install lifecycle hook. Worker/worklet JavaScript resolves relative to the plugin's served browser directory. The pinned host limits the entire plugin artifact to 16 MiB, so the approximately 65 MB model/runtime pack is served separately at the explicit same-origin static path `/pi-voice-speech/`. This path must be configured by the deployment operator; it is not a host API or private route. Do not place pack assets inside the plugin root. See `deployment.md`.
 
 Converted-model license labels differ across upstream/model cards; retain provenance and license notices and resolve redistribution requirements before release. A local build/prototype is not release approval.
 

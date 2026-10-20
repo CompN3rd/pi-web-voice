@@ -20,7 +20,7 @@ Use only pinned public Pi Web package entrypoints. Do not read private host data
 | Provider credentials | Not accessed by the speech layer; ordinary Pi workers retain their existing auth |
 | Thinking/raw tool payloads | Not exported by the companion |
 
-No paid speech endpoint, native cloud-backed browser recognition, or silent cloud fallback is permitted. Browser model loading must be self-hosted and constrained; do not confuse remote model-file downloads with remote inference. Offline speech readiness and full offline Pi operation are different claims.
+No paid speech endpoint, native cloud-backed browser recognition, or silent cloud fallback is permitted. Browser model loading must be self-hosted and constrained; do not confuse remote model-file downloads with remote inference. The large speech pack is served separately at the explicitly configured same-origin `/pi-voice-speech/` static path, outside the size-limited plugin package. Assets are byte/hash checked, redirects are rejected, inference fetch is cache-only, and the dedicated worker denies XMLHttpRequest to block the runtime's alternate loader. Offline speech readiness and full offline Pi operation are different claims.
 
 Browser speech synthesis is restricted to explicitly selected voices with `localService === true`, checked again at playback. Missing/changed/remote voices fail to text. That flag is not proof about all Android engine networking; verify actual device behavior in airplane mode and with device-level traffic observation. Browser request interception cannot inspect OS service traffic.
 

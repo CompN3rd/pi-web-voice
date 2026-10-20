@@ -6,16 +6,32 @@ The owner replaced the paid Realtime architecture with phone-browser-local speec
 
 Before this redesign, the parent reran `npm run verify` (33 tests, typecheck/build passed) and `npm run test:browser` (17 fake checks passed). The replacement removes the provider setup endpoint and API-key requirement, introduces local speech modules, and retains worker admission/companion contracts. A new server regression confirms obsolete `connect` and audio-upload operations reject without fetching while text list/approval operations remain available.
 
-Final redesign test counts, asset checks and review findings will be recorded after integration. No real Pixel 8, model inference, Android local-voice, live-host installation or privacy acceptance has yet been performed. No paid provider calls or live daemon operations are authorized by the redesign.
+Integrated baseline `12991ee` and XHR fix `46e0ebe`: strict typecheck/build and **66 unit/contract tests**, **69 browser fixture checks**, and **three actual-ORT browser runtime scenarios** passed in the implementation lanes. Final post-review counts and package checks are recorded below when complete.
+
+The parent explicitly provisioned the pinned public model pack (no inference service) and ran the full production Transformers/Whisper pipeline in desktop Edge from nested plugin URLs. With subsequent HTTP blocked, one second of synthetic sine PCM produced `[Music]` and zero further HTTP requests. Observed desktop inference took about 1.3 seconds on the first run and 3.2 seconds in a later implementation-lane rerun. This is runtime evidence, **not speech accuracy or Pixel latency evidence**; the noise transcription reinforces the need for transcript approval.
+
+No real Pixel 8, actual microphone, Android local-voice, live-host installation or device-level privacy acceptance has been performed. No paid provider calls or live daemon operations were performed.
 
 ### New acceptance gates
 
-1. Explicit speech-pack provisioning with pinned artifact integrity/provenance; matching local runtime assets and deployed plugin-relative URLs.
+1. Explicit speech-pack provisioning with pinned artifact integrity/provenance; matching local runtime assets and operator-configured same-origin `/pi-voice-speech/` static path. Plugin package must remain below the pinned host's 16 MiB artifact cap; pack lives outside the package root.
 2. Actual Whisper inference on the Pixel 8, including model preparation, short English commands, silence/noise, accuracy, latency, memory and thermal behavior.
 3. Speech-only offline readiness after preparation, missing/evicted cache behavior and proof that microphone samples never leave the browser.
 4. Local voice enumeration/selection, airplane-mode playback and device-level traffic inspection; browser mocks cannot attest Android system TTS.
 5. Permission denial/revocation, stop/off during permission/preparation/inference, page hide, scope switch, repeated recording, headset routes and browser lifecycle.
 6. One harmless approved new task and exact follow-up against an isolated real Pi Web instance. No retry of unknown delivery.
+
+### Independent review and remediation
+
+- Runtime review found a P1: actual ONNX glue could fall back from guarded fetch to unrestricted XHR. `46e0ebe` denies XHR in the dedicated worker. The actual-glue regression covers cached success, post-verification eviction and same-size corruption; a negative control against the old worker detected the fallback. Default runtime checks do not require model weights.
+- Panel review found a P1: recreating the output wrapper could forget failed OS cancellation, permitting capture while playback remained uncertain. A P2 also identified a fake successful reply to a running worker, contrary to the real backend. Both were accepted for remediation and independent re-review.
+- Parent packaging inspection identified the pinned host's 16 MiB total plugin artifact limit. Speech files are being separated into an explicitly hosted static pack rather than bypassing the host's public API boundary.
+
+### Dependency and license release gates
+
+Pinned Transformers.js adds six npm audit advisories (four moderate, two high, including inherited parent advisories) in Node-side development dependencies: `onnxruntime-node` → `global-agent` → `roarr` → `sprintf-js`, and `sharp` native image libraries. The speech browser entrypoint does not use those Node backends; install scripts were disabled. No forced audit upgrade was applied. This is a release review item, not a claim that dependencies are vulnerability-free.
+
+Converted Whisper model provenance/license labels require redistribution review before release. Exact model revision/hashes and notices are retained. Package remains private.
 
 ## Historical Realtime prototype record (superseded architecture)
 

@@ -51,15 +51,24 @@ Target contracts: Pi Web `1.202610.3` public browser API 4 / server API 3; Pi co
 npm ci --ignore-scripts
 npm run verify
 npm run test:browser
+npm run test:runtime
 ```
 
 `verify` runs strict typechecking, unit/contract tests and bundles. Browser checks use Playwright Core with installed Chromium/Edge, fake media/local inference/host and intercepted networking. Set `VOICE_BROWSER_EXECUTABLE` if needed. They do not establish Pixel performance, real microphone behavior, actual model accuracy or Android TTS privacy.
 
-Speech-pack provisioning and the final package validation procedure are documented with the runtime implementation. The pack must be present in the served browser assets before real recognition can be accepted; a passing fake fixture does not provide it.
+`test:runtime` exercises the actual pinned ONNX glue/WASM, including cache eviction/corruption and refusal of its XHR fallback. It does not download model weights or establish transcription accuracy.
+
+### Speech pack and hosting
+
+Pi Web's pinned plugin-artifact limit is **16 MiB**. The approximately **65 MB speech pack must be hosted separately from the plugin package**, under the same HTTPS origin at `/pi-voice-speech/`. This is a static path configured by the deployment operator, not a built-in/private Pi Web endpoint. The browser performs inference; the server only serves model/runtime files.
+
+Provisioning is explicit and verifies pinned file sizes and SHA-256 hashes. Use an output directory outside the checkout/package root. See [deployment](docs/deployment.md) for the exact commands, static mapping, package checks and optional full-model smoke test. A passing fake fixture does not provision a usable deployment.
+
+Preparation downloads/checks assets into browser Cache Storage. Inference is cache-only; evicted or corrupted files fail closed. Browser storage can be evicted and the host shell itself is not made offline. No service worker or background recording is installed.
 
 ## Installation boundary
 
-Do not activate the prototype in a live instance without a deliberate acceptance window. Install the built package as a **Pi package**, not merely a web-plugin symlink, so `dist/companion.js` is discovered; enable `compn3rd.voice` and trust/enable its companion for worker sessions.
+Do not activate the prototype in a live instance without a deliberate acceptance window. Install the checked tarball as a **Pi package**, not merely a web-plugin symlink, so `dist/companion.js` is discovered; enable `compn3rd.voice` and trust/enable its companion for worker sessions. Do not put the speech pack inside the installed package or install a development checkout containing oversized generated assets.
 
 New server plugins require a session-daemon restart arranged outside its hosted sessions. **Restart interrupts active sessions and terminals.** No repository script performs this. Browser reload or Pi `/reload` alone does not activate a new server plugin.
 
