@@ -1,23 +1,33 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { checkBrowserDirectory, checkInventory, MAX_PACKAGE_BYTES } from "../scripts/check-package-size.mjs";
 import { externalOutput, pack, packageRoot, sha256, speechManifest, validAsset } from "../scripts/speech-assets.mjs";
+import { exportSpeechPack } from "../scripts/export-speech-pack.mjs";
 
 async function fixture(run) {
   const root = await mkdtemp(join(tmpdir(), "pi-voice-assets-test-"));
   try { await run(root); } finally { await rm(root, { recursive: true, force: true }); }
 }
 
-test("speechManifest hashes matching runtime without copying assets into browser output", async () => {
+test("speechManifest pins asset hashes, lengths, order and explicit download URLs", async () => {
   const assets = await speechManifest();
   assert.equal(assets.length, pack.files.length + 1);
   assert.equal(assets.some(asset => asset.path.endsWith("README.md")), false);
+  assert.deepEqual(assets.slice(0, -2), pack.files.filter(file => file.path !== "README.md").map(file => ({
+    ...file, path: `models/${pack.model}/${file.path}`,
+    downloadUrl: `https://huggingface.co/onnx-community/whisper-tiny.en/resolve/2575352d61be1bf7225cf8f8b268a4678025fc58/${file.path}`,
+  })));
+  assert.deepEqual(assets.slice(-2).map(({ bytes, sha256 }) => ({ bytes, sha256 })), [
+    { bytes: 44484, sha256: "08fb86ec433c78bfb032c5d84a68b8e8e5a8d81268fa39e24314179a5767a5b9" },
+    { bytes: 21596019, sha256: "c46655e8a94afc45338d4cb2b840475f88e5012d524509916e505079c00bfa39" },
+  ]);
   for (const asset of assets.filter(asset => asset.path.startsWith("ort/"))) {
     assert.equal(validAsset(await readFile(join(packageRoot, "node_modules/onnxruntime-web/dist", asset.path.slice(4))), asset), true);
+    assert.equal(asset.downloadUrl, `https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0-dev.20250409-89f8206ba4/dist/${asset.path.slice(4)}`);
   }
   const bytes = Buffer.from("verified");
   const asset = { bytes: bytes.length, sha256: sha256(bytes) };
@@ -62,7 +72,7 @@ test("provision command requires external output and never implicitly downloads 
 test("package gate counts total bytes, accepts exact ceiling, rejects speech payloads regardless of size", () => {
   assert.equal(checkInventory([{ path: "index.js", size: MAX_PACKAGE_BYTES }]), MAX_PACKAGE_BYTES);
   assert.throws(() => checkInventory([{ path: "a.js", size: MAX_PACKAGE_BYTES }, { path: "b.txt", size: 1 }]), /exceeds/);
-  for (const path of ["dist/browser/speech/models/config.json", "model.onnx", "runtime.wasm", "weights.bin", "ort-wasm-simd-threaded.jsep.mjs"]) {
+  for (const path of ["dist/browser/speech/models/config.json", "model.onnx", "runtime.wasm", "weights.bin", "english.pivoice", "ENGLISH.PIVOICE", "ort-wasm-simd-threaded.jsep.mjs"]) {
     assert.throws(() => checkInventory([{ path, size: 1 }]), /external speech payload/);
   }
 });
@@ -99,6 +109,83 @@ test("package allowlist includes notices but excludes runtime/model directories"
   assert.equal(metadata.files.includes("dist"), false);
   for (const hook of ["install", "postinstall", "prepare", "prepack"]) assert.equal(metadata.scripts[hook], undefined);
   const worker = await readFile("src/browser/recognition-worker.ts", "utf8");
-  assert.match(worker, /new URL\("\/pi-voice-speech\/", import.meta.url\)/);
   assert.match(worker, /XMLHttpRequest is disabled/);
 });
+
+async function exportFixture(run) {
+  await fixture(async root => {
+    const input = join(root, "input");
+    await mkdir(join(input, "models"), { recursive: true });
+    const contents = [Buffer.from("first"), Buffer.alloc(130_001, 42)];
+    const assets = contents.map((bytes, index) => ({ path: `models/${index}.bin`, bytes: bytes.length, sha256: sha256(bytes) }));
+    for (let i = 0; i < assets.length; i++) await writeFile(join(input, assets[i].path), contents[i]);
+    // Untrusted metadata and notices are not part of the binary import.
+    await writeFile(join(input, "speech-assets.json"), '[{"path":"untrusted"}]');
+    await writeFile(join(input, "LICENSE"), "separate notice");
+    await run({ root, input, output: join(root, "english.pivoice"), assets, contents });
+  });
+}
+
+test("exportSpeechPack writes exact PIVOICE1 header and sequential raw assets, replacing regular output atomically", async () => exportFixture(async ({ root, input, output, assets, contents }) => {
+  await writeFile(output, "old file");
+  const length = await exportSpeechPack(input, output, assets);
+  const bytes = await readFile(output);
+  assert.equal(bytes.subarray(0, 8).toString("ascii"), "PIVOICE1");
+  assert.equal(length, 8 + assets.reduce((total, asset) => total + asset.bytes, 0));
+  assert.equal(bytes.length, length);
+  assert.deepEqual(bytes, Buffer.concat([Buffer.from("PIVOICE1"), ...contents]));
+  let offset = 8;
+  for (const asset of assets) {
+    assert.equal(validAsset(bytes.subarray(offset, offset + asset.bytes), asset), true);
+    offset += asset.bytes;
+  }
+  assert.deepEqual((await readdir(root)).sort(), ["english.pivoice", "input"]);
+}));
+
+test("exportSpeechPack rejects missing, short, oversized and corrupt sources without publishing or retaining temporary files", async () => {
+  for (const mutation of ["missing", "short", "oversized", "corrupt"]) await exportFixture(async ({ root, input, output, assets, contents }) => {
+    const path = join(input, assets[1].path);
+    if (mutation === "missing") await rm(path);
+    else if (mutation === "short") await writeFile(path, contents[1].subarray(1));
+    else if (mutation === "oversized") await writeFile(path, Buffer.concat([contents[1], Buffer.from("extra")]));
+    else await writeFile(path, Buffer.alloc(contents[1].length, 7));
+    await writeFile(output, "preserve previous output");
+    await assert.rejects(exportSpeechPack(input, output, assets), /ENOENT|length\/type|integrity/);
+    assert.equal(await readFile(output, "utf8"), "preserve previous output");
+    assert.deepEqual((await readdir(root)).sort(), ["english.pivoice", "input"]);
+    await rm(output);
+    await assert.rejects(exportSpeechPack(input, output, assets));
+    assert.deepEqual(await readdir(root), ["input"]);
+  });
+});
+
+test("exportSpeechPack rejects relative, internal, wrong-extension and symlink destinations", async () => exportFixture(async ({ root, input, output, assets }) => {
+  for (const destination of [undefined, "relative.pivoice", join(packageRoot, "forbidden.pivoice"), join(root, "wrong.zip")]) {
+    await assert.rejects(exportSpeechPack(input, destination, assets), /absolute|outside|pivoice/);
+  }
+  for (const source of [undefined, "relative", packageRoot]) await assert.rejects(exportSpeechPack(source, output, assets), /absolute|outside/);
+  const directory = join(root, "directory.pivoice");
+  await mkdir(directory);
+  await assert.rejects(exportSpeechPack(input, directory, assets), /regular file/);
+  const alias = join(root, "repo-alias");
+  await symlink(packageRoot, alias, process.platform === "win32" ? "junction" : "dir");
+  await assert.rejects(exportSpeechPack(input, join(alias, "new", "bad.pivoice"), assets), /outside/);
+  // Directory junctions exercise symlink refusal even on Windows without file-symlink privileges.
+  await symlink(input, output, process.platform === "win32" ? "junction" : "dir");
+  await assert.rejects(exportSpeechPack(input, output, assets), /symlink/);
+  await rm(output);
+  await symlink(join(root, "directory.pivoice"), join(input, "linked"), process.platform === "win32" ? "junction" : "dir");
+  await assert.rejects(exportSpeechPack(input, output, assets), /symlinks/);
+}));
+
+test("speech:export CLI requires explicit paths and has no download option or lifecycle hook", async () => fixture(async root => {
+  const metadata = JSON.parse(await readFile("package.json", "utf8"));
+  assert.equal(metadata.scripts["speech:export"], "node scripts/export-speech-pack.mjs");
+  for (const args of [[], ["--download"], ["--input", root, "--output", join(root, "missing.pivoice")]]) {
+    const result = spawnSync(process.execPath, ["scripts/export-speech-pack.mjs", ...args], { encoding: "utf8" });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /absolute|Unknown option|ENOENT/);
+    assert.doesNotMatch(result.stdout, /Downloading/);
+  }
+  assert.deepEqual(await readdir(root), []);
+}));

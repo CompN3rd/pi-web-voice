@@ -41,4 +41,4 @@ await mkdir(join(output, "ort"), { recursive: true });
 for (const name of runtimeNames) await copyFile(join(packageRoot, "node_modules/onnxruntime-web/dist", name), join(output, "ort", name));
 await copySpeechNotices(output);
 await writeFile(join(output, "speech-assets.json"), `${JSON.stringify(assets, null, 2)}\n`);
-console.log(`Speech pack verified at ${output}\nPublish this directory at same-origin /pi-voice-speech/ using an explicit operator static/reverse-proxy mapping.\nLicense/release review remains required: ${pack.licenseNote}`);
+console.log(`Speech pack verified at ${output}\nExport it with npm run speech:export -- --input \"${output}\" --output <absolute-external-file.pivoice>, then copy the file to your phone and explicitly import it in Voice. No server route is needed.\nRetain this directory's provenance and license notices separately from the import file.\nLicense/release review remains required: ${pack.licenseNote}`);
