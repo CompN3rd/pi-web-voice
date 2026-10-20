@@ -1,0 +1,57 @@
+{
+  "name": "@compn3rd/pi-web-voice",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Experimental native-audio voice cockpit for Pi Web",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=24"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "docs",
+    "LICENSE"
+  ],
+  "keywords": [
+    "pi-package"
+  ],
+  "pi": {
+    "extensions": [
+      "./dist/companion.js"
+    ]
+  },
+  "piWeb": {
+    "plugins": [
+      {
+        "id": "compn3rd.voice",
+        "defaultEnabled": false,
+        "browserRoot": "dist/browser",
+        "module": "dist/browser/index.js",
+        "serverModule": "dist/server.js",
+        "machineSpecific": true
+      }
+    ]
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test test/*.test.ts",
+    "verify": "npm run typecheck && npm test && npm run build"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@jmfederico/pi-web": "1.202610.3",
+    "@earendil-works/pi-coding-agent": "1.2.0",
+    "@types/node": "24.19.2",
+    "typebox": "1.1.38",
+    "esbuild": "0.28.2",
+    "lit": "3.3.3",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3"
+  }
+}
