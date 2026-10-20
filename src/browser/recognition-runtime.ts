@@ -1,5 +1,8 @@
+import type { SpeechPreparation } from "./recognition-assets.js";
+export type { SpeechPreparation } from "./recognition-assets.js";
+
 export interface RecognitionRuntime {
-  prepare(status: (message: string) => void): Promise<void>;
+  prepare(status: (message: string) => void, options?: SpeechPreparation): Promise<void>;
   transcribe(pcm: Float32Array): Promise<string>;
   terminate(): void;
 }
@@ -24,20 +27,24 @@ export class WorkerRecognitionRuntime implements RecognitionRuntime {
     this.worker.onerror = event => { event.preventDefault(); this.terminate(); };
     this.worker.onmessageerror = () => this.terminate();
   }
-  async prepare(status: (message: string) => void): Promise<void> { await this.request("prepare", status); }
+  async prepare(status: (message: string) => void, options: SpeechPreparation = { source: "cache" }): Promise<void> { await this.request("prepare", status, undefined, options); }
   transcribe(pcm: Float32Array): Promise<string> { return this.request("transcribe", () => {}, pcm); }
-  private request(type: string, status: (message: string) => void, pcm?: Float32Array): Promise<string> {
+  private request(type: string, status: (message: string) => void, pcm?: Float32Array, options?: SpeechPreparation): Promise<string> {
     if (this.closed || this.pending) return Promise.reject(new Error("Local speech worker unavailable or busy"));
     return new Promise((resolve, reject) => {
       const id = ++this.sequence;
       const timer = setTimeout(() => this.terminate(), type === "prepare" ? 300_000 : 120_000);
       this.pending = { id, resolve, reject, status, timer };
-      try { this.worker.postMessage({ id, type, pcm }, pcm ? [pcm.buffer as ArrayBuffer] : []); }
+      try { this.worker.postMessage({ id, type, pcm, options }, pcm ? [pcm.buffer as ArrayBuffer] : []); }
       catch (error) { this.terminate(); }
     });
   }
   terminate(): void {
+    if (this.closed) return;
     this.closed = true;
+    this.worker.onmessage = null;
+    this.worker.onerror = null;
+    this.worker.onmessageerror = null;
     this.worker.terminate();
     if (this.pending) {
       clearTimeout(this.pending.timer);

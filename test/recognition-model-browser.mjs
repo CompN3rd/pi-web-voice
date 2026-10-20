@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { createServer } from "node:http";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
@@ -12,10 +13,11 @@ const { values } = parseArgs({ options: { output: { type: "string" } } });
 const output = await externalOutput(values.output);
 const assets = await speechManifest();
 const files = new Map();
+const packParts = [Buffer.from("PIVOICE1")];
 for (const asset of assets) {
   const bytes = await readFile(join(output, asset.path));
   assert.ok(validAsset(bytes, asset), `External speech pack mismatch: ${asset.path}`);
-  files.set(`/pi-voice-speech/${asset.path}`, bytes);
+  packParts.push(bytes);
 }
 files.set("/nested/voice/recognition-worker.js", await readFile("dist/browser/recognition-worker.js"));
 const executablePath = process.env.VOICE_BROWSER_EXECUTABLE ?? (process.platform === "win32"
@@ -28,7 +30,7 @@ const server = createServer((request, response) => {
   response.setHeader("Content-Security-Policy", "default-src 'self'; script-src 'self' blob: 'wasm-unsafe-eval'; worker-src 'self' blob:; connect-src 'self'; img-src 'self' data:");
   if (path === "/") {
     response.setHeader("Content-Type", "text/html");
-    response.end('<!doctype html><link rel="icon" href="data:,"><title>Local model smoke</title>');
+    response.end('<!doctype html><link rel="icon" href="data:,"><title>Local model smoke</title><input type=file>');
   } else if (files.has(path)) {
     response.setHeader("Content-Type", /\.(?:js|mjs)$/.test(path) ? "text/javascript" : path.endsWith(".wasm") ? "application/wasm" : "application/octet-stream");
     response.end(files.get(path));
@@ -37,7 +39,10 @@ const server = createServer((request, response) => {
 await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
 const origin = `http://127.0.0.1:${server.address().port}`;
 let browser;
+const temporary = await mkdtemp(join(tmpdir(), "pi-voice-model-import-"));
 try {
+  const importPath = join(temporary, "speech.pivoice");
+  await writeFile(importPath, Buffer.concat(packParts));
   browser = await chromium.launch({ executablePath, headless: true });
   const context = await browser.newContext({ serviceWorkers: "block", permissions: [] });
   let inference = false;
@@ -53,6 +58,7 @@ try {
   });
   const page = await context.newPage();
   await page.goto(origin);
+  await page.locator("input").setInputFiles(importPath);
   const ready = await page.evaluate(async () => {
     window.worker = new Worker("/nested/voice/recognition-worker.js", { type: "module" });
     window.call = message => new Promise((resolve, reject) => {
@@ -65,10 +71,10 @@ try {
       };
       worker.postMessage(message);
     });
-    return await window.call({ id: 1, type: "prepare" });
+    return await window.call({ id: 1, type: "prepare", options: { source: "import", file: document.querySelector("input").files[0] } });
   });
   assert.equal(ready.type, "ready");
-  for (const asset of assets) assert.equal(requests.filter(path => path === `/pi-voice-speech/${asset.path}`).length, 1);
+  assert.deepEqual(requests.filter(path => path.includes("speech-cache") || path.includes("pi-voice-speech")), [], "no model server route or internal cache URL fetch");
   const count = requests.length;
   inference = true;
   const result = await page.evaluate(async () => {
@@ -88,4 +94,5 @@ try {
 } finally {
   await browser?.close();
   await new Promise(resolve => server.close(resolve));
+  await rm(temporary, { recursive: true, force: true });
 }
