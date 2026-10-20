@@ -66,6 +66,33 @@ test("verifiedAsset rejects missing, oversized, truncated and tampered bytes, in
   await assert.rejects(prepareSpeechAssets(urls, cache, async () => { throw new Error("must not retry corrupt cached assets"); }, () => {}), /integrity/);
 });
 
+test("explicit download replaces corrupt cache once; cached preparation and inference stay network-free", async () => {
+  const { cache } = memoryCache();
+  await cache.put(url, new Response(new Uint8Array(3)));
+  let calls = 0;
+  const fetchReplacement: typeof fetch = async () => { calls++; return downloaded(bytes); };
+  await assert.rejects(prepareSpeechAssets(urls, cache, fetchReplacement, () => {}), /integrity/);
+  await assert.rejects(cacheOnlySpeechFetch(urls, cache)(url), /integrity/);
+  assert.equal(calls, 0);
+  await prepareSpeechAssets(urls, cache, fetchReplacement, () => {}, { source: "download" });
+  assert.equal(calls, 1);
+  await prepareSpeechAssets(urls, cache, noDownload, () => {});
+  assert.deepEqual(new Uint8Array(await (await cacheOnlySpeechFetch(urls, cache)(url)).arrayBuffer()), bytes);
+});
+
+test("bad replacement never publishes readiness or retries, and preserves the previous cache", async () => {
+  for (const replacement of [() => downloaded(new Uint8Array(2)), () => downloaded(new Uint8Array(3)), () => downloaded(bytes, "https://evil.example/asset"), () => { throw new Error("download failed"); }]) {
+    const { cache } = memoryCache();
+    const corrupt = new Uint8Array([9, 9, 9]);
+    await cache.put(url, new Response(corrupt));
+    let calls = 0;
+    await assert.rejects(prepareSpeechAssets(urls, cache, async () => { calls++; return replacement(); }, () => {}, { source: "download" }));
+    assert.equal(calls, 1);
+    assert.deepEqual(new Uint8Array(await (await cache.match(url))!.arrayBuffer()), corrupt);
+    await assert.rejects(prepareSpeechAssets(urls, cache, noDownload, () => {}), /integrity/);
+  }
+});
+
 test("speech pack pins public provenance, revision, only q8 encoder/merged decoder, and hashes", async () => {
   const pack = JSON.parse(await readFile(new URL("../scripts/speech-pack.json", import.meta.url), "utf8"));
   assert.equal(pack.transformers, "3.8.1");

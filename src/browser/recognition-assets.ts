@@ -82,14 +82,23 @@ export async function prepareSpeechAssets(urls: ReadonlyMap<string, SpeechAsset>
       await cache.put(url, new Response(await verifiedAsset(new Response(slice), asset)));
     } else {
       const cached = await cache.match(url);
-      let response = cached;
-      if (!response) {
-        if (options.source !== "download") throw new Error("Speech pack missing; explicitly download or import to prepare");
-        response = await download(distributionUrl(asset), { method: "GET", credentials: "omit", referrerPolicy: "no-referrer", redirect: "follow", cache: "no-store" });
-        checkDownloadResponse(response, asset);
+      let bytes: ArrayBuffer | undefined;
+      if (cached) {
+        try { bytes = await verifiedAsset(cached, asset); }
+        catch (error) {
+          if (options.source !== "download") throw error;
+          status(`Replacing invalid cached speech asset: ${asset.path}`);
+        }
       }
-      const bytes = await verifiedAsset(response, asset);
-      if (!cached) await cache.put(url, new Response(bytes));
+      if (!bytes) {
+        if (options.source !== "download") throw new Error("Speech pack missing; explicitly download or import to prepare");
+        // This explicit action permits one replacement, not a retry loop. Do not
+        // overwrite even a corrupt cache entry until its replacement verifies.
+        const response = await download(distributionUrl(asset), { method: "GET", credentials: "omit", referrerPolicy: "no-referrer", redirect: "follow", cache: "no-store" });
+        checkDownloadResponse(response, asset);
+        bytes = await verifiedAsset(response, asset);
+        await cache.put(url, new Response(bytes));
+      }
     }
     checked += asset.bytes;
     status(`Local speech pack checked ${checked} / ${total} bytes`);

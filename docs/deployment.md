@@ -14,7 +14,7 @@ Open Pi Web through its existing secure HTTPS deployment, open Local voice and c
 
 - **Cached preparation:** verify the existing browser speech cache and initialize recognition. No model download is permitted. Use this after a previous successful import/download.
 - **Explicit download:** consent to roughly 65 MB of pinned public model/runtime downloads from Hugging Face and its CDN, and jsDelivr. No API key or separately billed inference service is involved. Requests omit credentials/referrer; the distribution hosts still see normal request metadata. Every file must pass compiled size/hash checks.
-- **File import:** select a matching `.pivoice` file from the phone's Files picker. Import is local and does not contact model-distribution hosts. This is the alternative when direct downloads are blocked by CORS, connectivity or the existing host policy; no proxy-route workaround is required.
+- **File import:** select a matching `.pivoice` file from the phone's Files picker, then tap **Import selected speech pack**. Selecting a file alone starts no import or microphone. This separate tap accommodates Android temporarily hiding the page for its native picker. Import is local and does not contact model-distribution hosts. This is the alternative when direct downloads are blocked by CORS, connectivity or the existing host policy; no proxy-route workaround is required.
 
 Preparation/import/download never opens the microphone. Once ready, explicitly record, finish, review the editable transcript and approve the exact text instruction. Inference is local and cache-only; approved worker text still goes to Pi and its configured provider.
 
@@ -57,7 +57,7 @@ npm pack --ignore-scripts
 
 `verify` includes strict typechecking, unit/deployment tests and bundling. `test:browser` uses fake media/inference/host in an installed Chromium/Edge browser. `test:runtime` exercises actual pinned ONNX glue/WASM, including its blocked XHR fallback. The package gate sums all packed files' **uncompressed bytes**, not tarball compression, and excludes large speech payloads.
 
-The optional `test:model` uses an existing local verified pack and actual browser inference; consult its command help/current implementation for the input option. It must not download weights automatically or require a model-serving host route. Synthetic PCM output proves initialization/inference wiring, not speech accuracy or Pixel performance.
+The optional `npm run test:model -- --output /external/pi-voice-pack` uses an existing local verified asset directory, constructs a matching import file, and exercises actual browser inference. It downloads no weights and serves no model route. Synthetic PCM output proves initialization/inference wiring, not speech accuracy or Pixel performance.
 
 ## Remaining real-device gates
 
