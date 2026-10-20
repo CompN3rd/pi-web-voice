@@ -42,7 +42,8 @@
     "test:browser": "node test/browser.mjs",
     "build:speech": "node scripts/build.mjs --speech-only",
     "speech:provision": "node scripts/provision-speech-pack.mjs",
-    "test:speech": "node --import tsx --test test/recognition-*.test.ts"
+    "test:speech": "node --import tsx --test test/recognition-*.test.ts",
+    "test:runtime": "node test/recognition-runtime-browser.mjs"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",

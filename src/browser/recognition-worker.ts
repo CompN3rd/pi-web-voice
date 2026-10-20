@@ -12,6 +12,11 @@ const scope = globalThis as unknown as {
 const base = new URL("./speech/", import.meta.url);
 const urls = speechAssetUrls(base, __SPEECH_ASSETS__);
 const download = globalThis.fetch.bind(globalThis);
+// ORT's pinned glue falls back to synchronous XHR when fetch fails. It must not
+// bypass cache-only fetch or integrity verification, even after cache eviction.
+Object.defineProperty(globalThis, "XMLHttpRequest", { value: class {
+  constructor() { throw new Error("XMLHttpRequest is disabled in the local speech worker"); }
+}, writable: false, configurable: false });
 // Deny fetch even before preparation; only prepareSpeechAssets receives the original downloader.
 globalThis.fetch = async () => { throw new Error("Local speech assets have not been prepared"); };
 let recognizer: AutomaticSpeechRecognitionPipeline | undefined;
