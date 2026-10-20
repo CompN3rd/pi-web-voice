@@ -1,35 +1,44 @@
-import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile, rename, rm } from "node:fs/promises";
-import { dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { copyFile, mkdir, readFile, writeFile, rename, rm } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
+import { parseArgs } from "node:util";
+import { copySpeechNotices, externalOutput, pack, packageRoot, runtimeNames, speechManifest, validAsset } from "./speech-assets.mjs";
 
-// Explicit owner opt-in. Never run from build, install, prepare, or package lifecycle hooks.
-if (!process.argv.includes("--download")) {
-  console.error("Opt in to public model downloads with: npm run speech:provision -- --download\nNo credentials or inference service are used. Model bytes remain outside git in dist/browser/speech/.");
-  process.exitCode = 1;
-} else {
-  const manifest = JSON.parse(await readFile(new URL("./speech-pack.json", import.meta.url), "utf8"));
-  const root = new URL(`../dist/browser/speech/models/${manifest.model}/`, import.meta.url);
-  for (const asset of manifest.files) {
-    const source = `https://huggingface.co/${manifest.model}/resolve/${manifest.revision}/${asset.path}`;
-    const target = new URL(asset.path, root);
-    const valid = bytes => bytes.length === asset.bytes && createHash("sha256").update(bytes).digest("hex") === asset.sha256;
-    try { if (valid(await readFile(target))) { console.log(`Verified ${asset.path}`); continue; } } catch (error) { if (error.code !== "ENOENT") throw error; }
+// Explicit operator action only; never invoked by build/install/package hooks.
+const { values } = parseArgs({ options: {
+  output: { type: "string" }, download: { type: "boolean", default: false }, "from-models": { type: "string" },
+} });
+const output = await externalOutput(values.output);
+const assets = await speechManifest();
+async function verifiedFile(path, asset) {
+  try { const bytes = await readFile(path); return validAsset(bytes, asset) ? bytes : undefined; }
+  catch (error) { if (error.code !== "ENOENT") throw error; }
+}
+for (const asset of pack.files) {
+  const target = join(output, "models", pack.model, asset.path);
+  if (await verifiedFile(target, asset)) { console.log(`Verified existing ${asset.path}`); continue; }
+  let bytes = values["from-models"] ? await verifiedFile(join(resolve(values["from-models"]), pack.model, asset.path), asset) : undefined;
+  if (bytes) console.log(`Reusing verified ${asset.path}`);
+  else {
+    if (!values.download) throw new Error(`Missing or invalid ${asset.path}; supply verified --from-models or explicitly opt in with --download`);
     console.log(`Downloading pinned ${asset.path} (${asset.bytes} bytes)`);
+    const source = `https://huggingface.co/${pack.model}/resolve/${pack.revision}/${asset.path}`;
     const response = await fetch(source, { signal: AbortSignal.timeout(180_000), credentials: "omit" });
     if (!response.ok || !response.body) throw new Error(`Download failed: ${response.status} ${asset.path}`);
-    const bytes = Buffer.alloc(asset.bytes);
+    bytes = Buffer.alloc(asset.bytes);
     let offset = 0;
     for await (const chunk of response.body) {
       if (offset + chunk.length > asset.bytes) throw new Error(`Oversized download: ${asset.path}`);
       bytes.set(chunk, offset); offset += chunk.length;
     }
-    if (offset !== asset.bytes || !valid(bytes)) throw new Error(`Integrity failure: ${asset.path}`);
-    await mkdir(dirname(fileURLToPath(target)), { recursive: true });
-    const temporary = new URL(`${asset.path}.partial`, root);
-    try { await writeFile(temporary, bytes); await rename(temporary, target); }
-    finally { await rm(temporary, { force: true }); }
+    if (offset !== asset.bytes || !validAsset(bytes, asset)) throw new Error(`Integrity failure: ${asset.path}`);
   }
-  await writeFile(new URL("../dist/browser/speech/speech-pack-provenance.json", import.meta.url), `${JSON.stringify(manifest, null, 2)}\n`);
-  console.log("Speech pack provisioned and verified. Run npm run build (or build:speech during integration). Browser prepare() separately opts in to downloading these self-hosted files.\nLicense/release review remains required: " + manifest.licenseNote);
+  await mkdir(dirname(target), { recursive: true });
+  const temporary = `${target}.partial`;
+  try { await writeFile(temporary, bytes); await rename(temporary, target); }
+  finally { await rm(temporary, { force: true }); }
 }
+await mkdir(join(output, "ort"), { recursive: true });
+for (const name of runtimeNames) await copyFile(join(packageRoot, "node_modules/onnxruntime-web/dist", name), join(output, "ort", name));
+await copySpeechNotices(output);
+await writeFile(join(output, "speech-assets.json"), `${JSON.stringify(assets, null, 2)}\n`);
+console.log(`Speech pack verified at ${output}\nPublish this directory at same-origin /pi-voice-speech/ using an explicit operator static/reverse-proxy mapping.\nLicense/release review remains required: ${pack.licenseNote}`);
