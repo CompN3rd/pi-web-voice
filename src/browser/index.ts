@@ -2,9 +2,10 @@ import { LitElement, html, css } from "lit";
 import type { PiWebPlugin, WorkspacePanelContext, JsonValue } from "@jmfederico/pi-web/plugin-api";
 import { text, MAX_MODEL, type Command, type Lease, type Worker, type ModelOption } from "../protocol.ts";
 import { LocalRecognizer } from "./audio.ts";
-import { LocalSpeechOutput } from "./speech-output.ts";
+import { LocalSpeechOutput, SPEECH_CANCELLATION_FAILURE } from "./speech-output.ts";
 
 const scope = (c?: WorkspacePanelContext) => c ? JSON.stringify([c.machine.id, c.workspace.projectId, c.workspace.id, c.state?.selectedSession?.id]) : "";
+const replyEligible = (w: Worker) => ["needs-input", "completed", "failed"].includes(w.status);
 const targetKey = (w: Worker) => `${w.id}:${w.revision}`;
 export class VoicePanel extends LitElement {
   static properties = { context: { attribute: false }, status: { state: true }, workers: { state: true }, drafts: { state: true }, transcript: { state: true }, taskTitle: { state: true }, model: { state: true }, target: { state: true }, models: { state: true }, detail: { state: true }, error: { state: true }, approving: { state: true }, speechStatus: { state: true }, selectedVoice: { state: true } };
@@ -22,6 +23,8 @@ export class VoicePanel extends LitElement {
   private approving = false;
   private recognizer?: LocalRecognizer;
   private speech?: LocalSpeechOutput;
+  private speechCancellationSafe = true;
+  private get cancellationSafe() { return this.speech?.cancellationSafe ?? this.speechCancellationSafe; }
   private speechStatus = "Text only: select a local English voice.";
   private selectedVoice = "";
   private timer?: ReturnType<typeof setInterval>;
@@ -31,7 +34,7 @@ export class VoicePanel extends LitElement {
   private activeContext?: WorkspacePanelContext;
   private refreshing = false;
   private hide = () => {
-    if (document.hidden) { this.shutdown(); this.status = "Page hidden · local speech canceled for privacy. Workers continue."; }
+    if (document.hidden) { this.shutdown(); this.status = "Page hidden · microphone off; speech stop requested. Workers continue."; }
     else this.requestUpdate();
   };
   static styles = css`
@@ -67,6 +70,7 @@ export class VoicePanel extends LitElement {
         if (message.startsWith("Text only:")) this.selectedVoice = "";
         this.requestUpdate();
       });
+      this.speechCancellationSafe = this.speech.cancellationSafe;
       this.requestUpdate();
     }
   }
@@ -103,16 +107,19 @@ export class VoicePanel extends LitElement {
   private shutdown() {
     this.revoke(); this.generation++; this.refreshing = false;
     this.recognizer?.dispose(); this.recognizer = undefined;
-    this.speech?.dispose(); this.speech = undefined; this.selectedVoice = "";
-    this.speechStatus = "Text only: select a local English voice.";
+    // Generation fences status callbacks, not the page-global cancellation latch.
+    this.speechCancellationSafe = this.speech?.dispose() ?? this.speechCancellationSafe;
+    this.speech = undefined; this.selectedVoice = "";
+    this.speechStatus = this.cancellationSafe ? "Text only: select a local English voice." : SPEECH_CANCELLATION_FAILURE;
     this.transcript = ""; this.drafts = []; this.approving = false;
     this.status = "Microphone off · prepare local speech again. Workers continue.";
   }
   private replyTarget() { return this.workers.find(w => targetKey(w) === this.target); }
-  private changeTarget(value: string) { this.shutdown(); this.target = value; this.status = "Target changed · audio and drafts discarded. Prepare again or type below."; }
-  private changeModel(value: string) { this.shutdown(); this.model = value; this.status = "Model changed · audio and drafts discarded. Prepare again or type below."; }
+  private changeTarget(value: string) { this.shutdown(); this.target = value; this.status = "Target changed · microphone work and drafts discarded. Prepare again or type below."; }
+  private changeModel(value: string) { this.shutdown(); this.model = value; this.status = "Model changed · microphone work and drafts discarded. Prepare again or type below."; }
   private get busy() { return !!this.recognizer && ["preparing", "starting", "recording", "transcribing"].includes(this.recognizer.state); }
   private async prepare() {
+    if (!this.cancellationSafe) throw new Error(SPEECH_CANCELLATION_FAILURE);
     if (document.hidden || !this.isConnected || this.busy || this.approving || this.recognizer?.ready) return;
     const generation = this.generation;
     const recognizer = new LocalRecognizer({
@@ -136,9 +143,9 @@ export class VoicePanel extends LitElement {
     if (!recognizer || document.hidden) return;
     if (recognizer.state === "recording") { await recognizer.finish(); return; }
     if (!recognizer.ready || this.approving) return;
-    if (!this.target || (this.target !== "new" && !this.replyTarget())) throw new Error("Select a new task or an exact worker revision first.");
-    this.speech?.cancel();
-    if (this.speechStatus.includes("cancellation failed")) throw new Error("Cannot capture while speech cancellation is uncertain.");
+    const worker = this.replyTarget();
+    if (!this.target || (this.target !== "new" && (!worker || !replyEligible(worker)))) throw new Error("Select a new task or an exact settled worker revision first.");
+    if (!this.cancellationSafe || this.speech?.cancel() === false) throw new Error(SPEECH_CANCELLATION_FAILURE);
     this.revoke(); this.transcript = ""; this.drafts = [];
     // Target/model changes and worker revision changes dispose this recognizer. Its
     // generation binds this utterance to the exact selection, never a later target.
@@ -187,7 +194,7 @@ export class VoicePanel extends LitElement {
       if (this.busy || this.approving) return;
       const prompt = text(this.transcript, "instruction");
       const worker = this.replyTarget();
-      if (this.target !== "new" && !worker) throw new Error("Select an exact worker revision first.");
+      if (this.target !== "new" && (!worker || !replyEligible(worker))) throw new Error("Select an exact settled worker revision first.");
       this.revoke();
       this.drafts = [worker
         ? { kind: "reply", requestId: crypto.randomUUID(), workerId: worker.id, expectedRevision: worker.revision, prompt }
@@ -200,7 +207,7 @@ export class VoicePanel extends LitElement {
     void Promise.resolve().then(() => { if (this.current(generation)) return action(); }).catch(error => { if (this.current(generation) && context === scope(this.context)) this.showError(error); });
   }
   private speak(value: string) {
-    if (this.busy || document.hidden || !this.isConnected) return;
+    if (!this.cancellationSafe || this.busy || document.hidden || !this.isConnected) return;
     this.speech?.speak(value.slice(0, 1000));
   }
   render() {
@@ -211,13 +218,13 @@ export class VoicePanel extends LitElement {
     return html`
       <h2>Local voice <small>· experimental</small></h2>
       <p><strong>${c?.machine.name} / ${c?.state?.selectedProject?.name ?? c?.workspace.projectId} / ${c?.workspace.label}</strong></p>
-      <p class="muted">Pixel 8 phone-browser speech · English only. Not driving-validated. Foreground only: hiding, closing, changing context or turning off cancels local audio, not workers. No cloud speech fallback.</p>
+      <p class="muted">Pixel 8 phone-browser speech · English only. Not driving-validated. Foreground only: hiding, closing, changing context or turning off stops microphone work and requests speech cancellation, not worker cancellation. No cloud speech fallback.</p>
       <section aria-label="Local speech controls">
-        <p class="state" role="status">${this.status}</p>
+        <p class="state" role="status">${this.cancellationSafe ? this.status : SPEECH_CANCELLATION_FAILURE}</p>
         <p>Prepare downloads/checks approximately 65 MB of self-hosted speech assets, plus cache overhead. Uses phone storage, memory and battery. Preparation never opens the microphone. Audio stays transient on this device.</p>
         <div class="toolbar">
-          <button class="primary" ?disabled=${this.approving || this.busy || this.recognizer?.ready} @click=${() => this.run(() => this.prepare())}>Prepare local English speech pack</button>
-          <button class="primary" aria-pressed=${recording ? "true" : "false"} ?disabled=${this.approving || (!recording && !this.recognizer?.ready) || !this.target} @click=${() => this.run(() => this.toggleRecording())}>${recording ? "Finish recording" : "Start recording"}</button>
+          <button class="primary" ?disabled=${!this.cancellationSafe || this.approving || this.busy || this.recognizer?.ready} @click=${() => this.run(() => this.prepare())}>Prepare local English speech pack</button>
+          <button class="primary" aria-pressed=${recording ? "true" : "false"} ?disabled=${!this.cancellationSafe || this.approving || (!recording && !this.recognizer?.ready) || !this.target || (!!worker && !replyEligible(worker))} @click=${() => this.run(() => this.toggleRecording())}>${recording ? "Finish recording" : "Start recording"}</button>
           <button class="danger" @click=${() => this.shutdown()}>Cancel / voice off</button>
         </div>
         <p>Maximum 20 seconds per recording. Finish only creates an untrusted, editable draft; it never sends an instruction. Cancel requires explicit preparation again.</p>
@@ -228,12 +235,12 @@ export class VoicePanel extends LitElement {
         <form @submit=${(event: SubmitEvent) => this.propose(event)}>
           <label>Instruction target<select .value=${this.target} @change=${(event: Event) => this.changeTarget((event.target as HTMLSelectElement).value)}>
             <option value="">Select an exact target</option><option value="new">New task</option>
-            ${this.workers.map(w => html`<option value=${targetKey(w)}>Reply: ${w.title} · ${w.id} · revision ${w.revision}</option>`)}
+            ${this.workers.map(w => html`<option value=${targetKey(w)} ?disabled=${!replyEligible(w)}>Reply: ${w.title} · ${w.id} · revision ${w.revision} · ${w.status}</option>`)}
           </select></label>
           ${worker ? html`<p class="id">Reply to ${worker.id} · revision ${worker.revision} · existing model ${worker.model}</p>` : html`<label>Title<input name="title" ?disabled=${this.approving} required maxlength="100" .value=${this.taskTitle} @input=${(event: Event) => { this.taskTitle = (event.target as HTMLInputElement).value; this.drafts = []; this.revoke(); }}></label>`}
           <label>Editable transcript / task text<textarea name="prompt" required maxlength="16000" ?disabled=${this.busy || this.approving} .value=${this.transcript} @input=${(event: Event) => { this.transcript = (event.target as HTMLTextAreaElement).value; this.drafts = []; this.revoke(); }}></textarea></label>
           ${!worker ? html`<label>Worker model (empty = Pi default)<input name="model" list="voice-models" maxlength="512" .value=${this.model} @input=${(event: Event) => this.changeModel((event.target as HTMLInputElement).value)}><datalist id="voice-models">${this.models.map(m => html`<option value=${m.id}>${m.name}</option>`)}</datalist></label>` : ""}
-          <button type="submit" ?disabled=${this.busy || this.approving || !this.target}>Propose exact instruction</button>
+          <button type="submit" ?disabled=${this.busy || this.approving || !this.target || (!!worker && !replyEligible(worker))}>Propose exact instruction</button>
         </form>
         <details><summary>Text fallback and worker model catalog</summary><p>Typing needs no speech pack, microphone or local voice. Model selection is independent of speech. The catalog requires a selected hosted conversation with the companion enabled; no hidden session is created.</p>
           <button @click=${() => this.run(async () => { const id = c?.state?.selectedSession?.id; if (!id) throw new Error("Select a hosted conversation first, or enter exact provider/model ID manually."); this.models = await this.request("models", { sessionId: id }) as unknown as ModelOption[]; })}>Load available models</button>
@@ -243,15 +250,15 @@ export class VoicePanel extends LitElement {
       ${this.error ? html`<p class="error" role="alert">${this.error}</p>` : ""}
       ${this.drafts.map(d => html`<article aria-label="Exact proposal"><h3>Proposed ${d.kind === "start" ? d.title : "follow-up"} · NOT submitted</h3><p class="id">${d.workerId ? `Reply to ${d.workerId} · revision ${d.expectedRevision} · existing model ${worker?.model}` : `New worker · ${d.model ?? "Pi default"}`} · request ${d.requestId}</p><pre>${d.prompt}</pre><div class="toolbar"><button class="primary" ?disabled=${this.busy || this.approving} @click=${() => this.run(() => this.execute(d))}>Approve exact instruction</button><button @click=${() => { this.drafts = []; this.revoke(); }}>Dismiss</button></div></article>`)}
       <section aria-label="Local playback">
-        <h3>Local playback</h3><p role="status">${this.speechStatus}</p>
+        <h3>Local playback</h3><p role="status" class=${this.cancellationSafe ? "" : "error"}>${this.cancellationSafe ? this.speechStatus : SPEECH_CANCELLATION_FAILURE}</p>
         <label>Local English voice<select .value=${this.selectedVoice} @change=${(event: Event) => { this.selectedVoice = (event.target as HTMLSelectElement).value; this.speech?.select(this.selectedVoice); }}><option value="">Text only · select a voice explicitly</option>${this.speech?.voices().map(v => html`<option value=${v.voiceURI}>${v.name} (${v.lang})</option>`)}</select></label>
         <p>Only voices marked local by the browser/OS are offered. This is not network attestation; Pixel offline acceptance is still required.</p>
-        <div class="toolbar"><button ?disabled=${this.busy || !this.selectedVoice || !statuses} @click=${() => this.speak(statuses)}>Speak worker status</button><button @click=${() => this.speech?.cancel()}>Stop speaking</button></div>
+        <div class="toolbar"><button ?disabled=${!this.cancellationSafe || this.busy || !this.selectedVoice || !statuses} @click=${() => this.speak(statuses)}>Speak worker status</button><button @click=${() => this.speech?.cancel()}>Stop speaking</button></div>
         ${statuses.length > 1000 ? html`<p>Status playback is truncated to the first 1000 characters.</p>` : ""}
       </section>
       <section><h3>Workers</h3><button @click=${() => this.run(() => this.refresh())}>Refresh status</button><p>Completion means the agent turn settled, not independent verification. Generic Pi forms/dialogs still require the conversation UI.</p>
         ${this.workers.length ? this.workers.map(w => html`<article><strong>${w.title}</strong> · <span class="state">${w.status}</span><p class="id">${w.id} · revision ${w.revision} · ${w.model}</p><div class="toolbar"><button @click=${() => this.run(async () => { this.detail = await this.request("read", { workerId: w.id }) as unknown as Worker; })}>Read text / question</button><button ?disabled=${!w.sessionId} @click=${() => this.run(() => c?.navigate({ machineId: c.machine.id, projectId: c.workspace.projectId, workspaceId: c.workspace.id, sessionId: w.sessionId, view: "chat" }))}>Open conversation</button></div></article>`) : html`<p>No tracked workers in this workspace.</p>`}
-        ${this.detail ? html`<article><h3>${this.detail.title}</h3><pre>${result}</pre><p>${result.length > 1000 ? "Playback is truncated: reads only the first 1000 characters. Full text is shown above." : "Playback reads this result/question, at most 1000 characters."}</p><div class="toolbar"><button ?disabled=${this.busy || !this.selectedVoice || !result} @click=${() => this.speak(result)}>Speak result / question prefix</button><button @click=${() => { this.speech?.cancel(); this.detail = undefined; }}>Close detail</button></div></article>` : ""}
+        ${this.detail ? html`<article><h3>${this.detail.title}</h3><pre>${result}</pre><p>${result.length > 1000 ? "Playback is truncated: reads only the first 1000 characters. Full text is shown above." : "Playback reads this result/question, at most 1000 characters."}</p><div class="toolbar"><button ?disabled=${!this.cancellationSafe || this.busy || !this.selectedVoice || !result} @click=${() => this.speak(result)}>Speak result / question prefix</button><button @click=${() => { this.speech?.cancel(); this.detail = undefined; }}>Close detail</button></div></article>` : ""}
       </section>`;
   }
 }
