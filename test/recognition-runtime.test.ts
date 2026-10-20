@@ -43,3 +43,44 @@ test("WorkerRecognitionRuntime transfers bounded PCM, ignores stale IDs and term
     if (original) Object.defineProperty(globalThis, "Worker", original); else Reflect.deleteProperty(globalThis, "Worker");
   }
 });
+
+test("WorkerRecognitionRuntime forwards cache/download/import preparation and fences all canceled callbacks", async () => {
+  const original = Object.getOwnPropertyDescriptor(globalThis, "Worker");
+  let instance!: FakeWorker;
+  class FakeWorker {
+    onmessage: ((event: { data: unknown }) => void) | null = null;
+    onerror: ((event: { preventDefault(): void }) => void) | null = null;
+    onmessageerror: (() => void) | null = null;
+    message?: { id: number; options: unknown };
+    terminations = 0;
+    constructor() { instance = this; }
+    postMessage(message: { id: number; options: unknown }, transfer: Transferable[]) { this.message = message; assert.deepEqual(transfer, []); }
+    terminate() { this.terminations++; }
+  }
+  Object.defineProperty(globalThis, "Worker", { value: FakeWorker, configurable: true });
+  try {
+    const options = [undefined, { source: "cache" } as const, { source: "download" } as const, { source: "import", file: new Blob(["PIVOICE1"]) } as const];
+    for (const option of options) {
+      const runtime = new WorkerRecognitionRuntime();
+      const statuses: string[] = [];
+      const prepare = runtime.prepare(message => statuses.push(message), option);
+      assert.deepEqual(instance.message?.options, option ?? { source: "cache" });
+      const late = instance.onmessage!;
+      const lateError = instance.onerror!;
+      runtime.terminate();
+      await assert.rejects(prepare, /stopped/);
+      assert.equal(instance.onmessage, null);
+      assert.equal(instance.onerror, null);
+      assert.equal(instance.onmessageerror, null);
+      late({ data: { id: instance.message!.id, type: "status", message: "late" } });
+      late({ data: { id: instance.message!.id, type: "ready" } });
+      assert.deepEqual(statuses, []);
+      assert.equal(instance.terminations, 1);
+      // Even a callback already queued before termination cannot revive work.
+      lateError({ preventDefault() {} });
+      await assert.rejects(runtime.prepare(() => {}), /unavailable/);
+    }
+  } finally {
+    if (original) Object.defineProperty(globalThis, "Worker", original); else Reflect.deleteProperty(globalThis, "Worker");
+  }
+});

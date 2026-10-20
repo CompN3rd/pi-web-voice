@@ -137,3 +137,31 @@ test("LocalRecognizer runtime failure rejects and disables start until explicit 
   assert.equal(f.counts().terminated, 1);
   await assert.rejects(f.recognizer.start(), /Prepare/);
 });
+
+test("LocalRecognizer defaults to cache and forwards explicit preparation modes without microphone", async () => {
+  for (const options of [undefined, { source: "download" } as const, { source: "import", file: new Blob(["PIVOICE1"]) } as const]) {
+    let received: unknown;
+    let terminated = 0;
+    let report!: (message: string) => void;
+    const loading = deferred<void>();
+    const statuses: string[] = [];
+    const recognizer = LocalRecognizer.createForTest({ status: message => statuses.push(message), transcript: () => assert.fail("no transcript") }, {
+      createRuntime: () => ({
+        prepare: (status, options) => { received = options; report = status; return loading.promise; },
+        transcribe: async () => { throw new Error("no inference"); },
+        terminate: () => { terminated++; },
+      }),
+      openCapture: async () => { throw new Error("no microphone"); },
+    });
+    const preparing = recognizer.prepare(options);
+    assert.deepEqual(received, options ?? { source: "cache" });
+    recognizer.cancel();
+    const count = statuses.length;
+    report("late preparation progress");
+    loading.resolve();
+    await assert.rejects(preparing, { name: "AbortError" });
+    assert.equal(statuses.length, count);
+    assert.equal(recognizer.ready, false);
+    assert.equal(terminated, 1);
+  }
+});

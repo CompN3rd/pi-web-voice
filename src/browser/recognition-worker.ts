@@ -1,5 +1,5 @@
 import { env, pipeline, type AutomaticSpeechRecognitionPipeline } from "@huggingface/transformers";
-import { cacheOnlySpeechFetch, prepareSpeechAssets, speechAssetUrls, type SpeechAsset } from "./recognition-assets.js";
+import { cacheOnlySpeechFetch, prepareSpeechAssets, speechAssetUrls, type SpeechAsset, type SpeechPreparation } from "./recognition-assets.js";
 import { hasSpeechEnergy, MAX_PCM_SAMPLES, MAX_TRANSCRIPT_CHARACTERS } from "./recognition-pcm.js";
 
 // Build injects pinned model checksums plus hashes of the matching npm runtime assets.
@@ -9,7 +9,7 @@ const scope = globalThis as unknown as {
   onmessage: ((event: MessageEvent) => void) | null;
   postMessage(value: unknown): void;
 };
-const base = new URL("/pi-voice-speech/", import.meta.url);
+const base = new URL("./speech-cache/", import.meta.url);
 const urls = speechAssetUrls(base, __SPEECH_ASSETS__);
 const download = globalThis.fetch.bind(globalThis);
 // ORT's pinned glue falls back to synchronous XHR when fetch fails. It must not
@@ -23,9 +23,9 @@ let recognizer: AutomaticSpeechRecognitionPipeline | undefined;
 let busy = false;
 let prepared = false;
 
-async function prepare(id: number): Promise<void> {
+async function prepare(id: number, options?: SpeechPreparation): Promise<void> {
   const cache = await caches.open(__SPEECH_CACHE__);
-  await prepareSpeechAssets(urls, cache, download, message => scope.postMessage({ id, type: "status", message }));
+  await prepareSpeechAssets(urls, cache, download, message => scope.postMessage({ id, type: "status", message }), options);
   const localFetch = cacheOnlySpeechFetch(urls, cache);
   globalThis.fetch = localFetch;
   env.allowLocalModels = true;
@@ -62,7 +62,7 @@ scope.onmessage = ({ data }) => {
   void (async () => {
     try {
       if (data.type === "prepare" && !prepared) {
-        await prepare(id);
+        await prepare(id, data.options);
         scope.postMessage({ id, type: "ready" });
       } else if (data.type === "transcribe" && prepared && recognizer) {
         const pcm = data.pcm;

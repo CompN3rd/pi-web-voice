@@ -14,12 +14,12 @@ const pack = JSON.parse(await readFile("scripts/speech-pack.json", "utf8"));
 const ortPackage = JSON.parse(await readFile("node_modules/onnxruntime-web/package.json", "utf8"));
 assert.equal(ortPackage.version, pack.onnxRuntime);
 const assets = [];
-const runtime = new Map();
+const packParts = [Buffer.from("PIVOICE1")];
 for (const name of ["ort-wasm-simd-threaded.jsep.mjs", "ort-wasm-simd-threaded.jsep.wasm"]) {
   const bytes = await readFile(`node_modules/onnxruntime-web/dist/${name}`);
   const path = `ort/${name}`;
   assets.push({ path, bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") });
-  runtime.set(`/pi-voice-speech/${path}`, bytes);
+  packParts.push(bytes);
 }
 const cacheName = "pi-voice-runtime-browser-regression";
 const adapter = `
@@ -104,13 +104,11 @@ let requests = [];
 const server = createServer((request, response) => {
   const path = new URL(request.url, "http://localhost").pathname;
   requests.push(path);
-  if (path === "/") { response.setHeader("Content-Type", "text/html"); response.end("<!doctype html><title>Local ORT regression</title>"); }
+  if (path === "/") { response.setHeader("Content-Type", "text/html"); response.end("<!doctype html><title>Local ORT regression</title><input type=file>"); }
   else if (path === "/nested/voice/bootstrap.js" || path === "/nested/voice/recognition-worker.js") {
     response.setHeader("Content-Type", "text/javascript");
     response.end(path.endsWith("bootstrap.js") ? bootstrap : output.outputFiles[0].text);
-  } else if (runtime.has(path)) {
-    response.setHeader("Content-Type", path.endsWith(".wasm") ? "application/wasm" : "text/javascript");
-    response.end(runtime.get(path));
+
   } else { response.writeHead(404); response.end(); }
 });
 await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
@@ -122,7 +120,7 @@ try {
     const context = await browser.newContext({ serviceWorkers: "block" });
     try {
       const unexpectedNetwork = [];
-      const allowed = new Set(["/", "/nested/voice/bootstrap.js", "/nested/voice/recognition-worker.js", ...runtime.keys()]);
+      const allowed = new Set(["/", "/nested/voice/bootstrap.js", "/nested/voice/recognition-worker.js"]);
       await context.route("**/*", route => {
         const url = new URL(route.request().url());
         if (url.origin === origin && allowed.has(url.pathname) && !url.search && route.request().method() === "GET") return route.continue();
@@ -132,20 +130,32 @@ try {
       const page = await context.newPage();
       requests = [];
       await page.goto(origin);
-      const result = await page.evaluate(scenario => new Promise((resolve, reject) => {
+      await page.locator("input").setInputFiles({ name: "runtime.pivoice", mimeType: "application/octet-stream", buffer: Buffer.concat(packParts) });
+      const prepare = source => page.evaluate(({ scenario, source }) => new Promise((resolve, reject) => {
         const worker = new Worker("/nested/voice/bootstrap.js", { type: "module", name: scenario });
         const timer = setTimeout(() => { worker.terminate(); reject(new Error("ORT regression timed out")); }, 60_000);
         worker.onerror = event => { clearTimeout(timer); worker.terminate(); reject(new Error(event.message)); };
         worker.onmessage = ({ data }) => {
-          if (data.type === "loaded") worker.postMessage({ id: 1, type: "prepare" });
+          if (data.type === "loaded") worker.postMessage({ id: 1, type: "prepare", options: source === "import" ? { source, file: document.querySelector("input").files[0] } : undefined });
           else if (data.type !== "status") { clearTimeout(timer); worker.terminate(); resolve(data); }
         };
-      }), scenario);
+      }), { scenario, source });
+      const missing = await prepare("cache");
+      assert.equal(missing.type, "error");
+      assert.match(missing.message, /Speech pack missing/);
+      assert.equal(missing.stats.prepared, false);
+      assert.equal(missing.stats.nativeXhr, 0);
+      const result = await prepare("import");
+      if (scenario === "cached") {
+        const reused = await prepare("cache");
+        assert.equal(reused.type, "ready", "new worker prepares from verified cache with no import/download");
+        assert.equal(reused.stats.ortInit, 0);
+        assert.equal(reused.stats.nativeXhr, 0);
+      }
       assert.equal(result.stats.prepared, true, `${scenario}: verified preparation completed before fault injection`);
       assert.equal(result.stats.nativeXhr, 0, `${scenario}: no native XHR fallback`);
       assert.deepEqual(unexpectedNetwork, [], `${scenario}: no non-asset network requests`);
-      for (const path of runtime.keys()) assert.equal(requests.filter(request => request === path).length, 1,
-        `${scenario}: ${path} downloaded only during explicit preparation, never by fallback`);
+      assert.deepEqual(requests.filter(path => path.includes("speech-cache") || path.includes("pi-voice-speech")), [], "no speech asset server route or internal cache URL fetch");
       if (scenario === "cached") {
         assert.equal(result.type, "ready", JSON.stringify(result));
         assert.equal(result.stats.ortInit, 0);

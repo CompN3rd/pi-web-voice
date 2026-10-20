@@ -1,6 +1,8 @@
 import { openPcmCapture, type OpenPcmCapture, type PcmCapture } from "./recognition-capture.js";
 import { hasSpeechEnergy, MAX_PCM_SAMPLES, MAX_TRANSCRIPT_CHARACTERS, MAX_UTTERANCE_SECONDS } from "./recognition-pcm.js";
-import { WorkerRecognitionRuntime, type RecognitionRuntime } from "./recognition-runtime.js";
+import { WorkerRecognitionRuntime, type RecognitionRuntime, type SpeechPreparation } from "./recognition-runtime.js";
+
+export type { SpeechPreparation } from "./recognition-assets.js";
 
 export interface LocalRecognitionCallbacks {
   status(message: string): void;
@@ -13,7 +15,7 @@ export interface LocalRecognitionDependencies {
 export type LocalRecognitionState = "unprepared" | "preparing" | "ready" | "starting" | "recording" | "transcribing" | "disposed";
 
 /** Foreground, English-only, memory-only recognition. Text is untrusted and confers no instruction authority.
- * prepare() is explicit consent to fetch/check the self-hosted speech pack, without opening the microphone.
+ * prepare() checks cache by default; download/import requires explicit options, never a microphone.
  * cancel() stops tracks and terminates the worker (including prepare), so prepare() is required again.
  * Failed/canceled operations reject; callers must handle rejections. No automatic retries or remote fallback.
  */
@@ -57,7 +59,7 @@ export class LocalRecognizer {
       })]);
     } finally { if (aborted) signal.removeEventListener("abort", aborted); }
   }
-  async prepare(): Promise<void> {
+  async prepare(options: SpeechPreparation = { source: "cache" }): Promise<void> {
     if (this.ready) return;
     if (this.currentState !== "unprepared") throw new Error("Local speech is busy or disposed");
     const epoch = this.epoch;
@@ -65,7 +67,7 @@ export class LocalRecognizer {
     try {
       this.status(epoch, "Preparing local English speech pack; no microphone is open…");
       const runtime = this.runtime = this.dependencies.createRuntime();
-      await this.pending(runtime.prepare(message => { if (epoch === this.epoch) this.callbacks.status(message); }), epoch);
+      await this.pending(runtime.prepare(message => { if (epoch === this.epoch) this.callbacks.status(message); }, options), epoch);
       this.check(epoch);
       this.currentState = "ready";
       this.status(epoch, "Local speech ready · audio stays on this device");
