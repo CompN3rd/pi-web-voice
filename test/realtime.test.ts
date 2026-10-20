@@ -2,6 +2,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { exchangeSdp, sessionConfig, VOICE_TOOLS } from "../src/realtime.ts";
 
+test("serialized SDP is bounded after JSON escaping", async t => {
+  const old = process.env.OPENAI_API_KEY; process.env.OPENAI_API_KEY = "test";
+  t.after(() => { if (old === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = old; });
+  const request: typeof fetch = async () => new Response("v=0\r\n" + "a=x\r\n".repeat(9500));
+  await assert.rejects(exchangeSdp({ sdp: "v=0\r\n" }, {}, new AbortController().signal, request), /Serialized SDP/);
+});
 test("config uses native audio and GA semantic VAD schema; no separate STT/TTS", () => {
   const config = sessionConfig({});
   assert.deepEqual(config.output_modalities, ["audio"]);

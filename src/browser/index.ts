@@ -1,6 +1,6 @@
 import { LitElement, html, css } from "lit";
 import type { PiWebPlugin, WorkspacePanelContext, JsonValue } from "@jmfederico/pi-web/plugin-api";
-import { record, text, uuid, type Command, type Lease, type Worker, type ModelOption } from "../protocol.ts";
+import { record, text, uuid, MAX_MODEL, type Command, type Lease, type Worker, type ModelOption } from "../protocol.ts";
 import { AudioConnection } from "./audio.ts";
 
 const scope = (c?: WorkspacePanelContext) => c ? JSON.stringify([c.machine.id, c.workspace.projectId, c.workspace.id]) : "";
@@ -20,6 +20,7 @@ export class VoicePanel extends LitElement {
   private voice?: AudioConnection;
   private timer?: ReturnType<typeof setInterval>;
   private generation = 0;
+  private permissionEpoch = 0;
   private lastScope = "";
   private activeContext?: WorkspacePanelContext;
   private refreshing = false;
@@ -94,12 +95,17 @@ export class VoicePanel extends LitElement {
     });
     this.voice = voice; this.connected = true;
     try {
-      await voice.start(async (sdp, signal) => text(record(await this.request("connect", { sdp }, signal)).sdp, "SDP", 48_000));
+      await voice.start(async (sdp, signal) => {
+        const answer = record(await this.request("connect", { sdp }, signal)).sdp;
+        text(answer, "SDP", 48_000);
+        return answer as string; // SDP is protocol text, not a trimmed user input.
+      });
       if (this.voice !== voice) return;
       if (navigator.wakeLock) { try { const lock = await navigator.wakeLock.request("screen"); if (this.voice === voice) this.wakeLock = lock; else await lock.release(); } catch { /* optional, never a background guarantee */ } }
     } catch (error) { if (generation === this.generation) { this.showError(error); this.status = "Disconnected · microphone off"; } }
   }
   private revoke() {
+    this.permissionEpoch++;
     this.lease = undefined;
     // Capture the old peer; selection changes must revoke the old scope, not the new one.
     void this.activeContext?.peer?.request?.("disarm", {}).catch(() => {});
@@ -112,10 +118,25 @@ export class VoicePanel extends LitElement {
   }
   private async arm() {
     if (!confirm("Allow up to THREE text instructions (new workers or follow-ups) over the next 10 minutes in this workspace? Workers have ordinary Pi tool permissions and may edit files or run commands. Voice, other speakers, and model mistakes may trigger them. Enable only while parked and with a trusted audio environment.")) return;
-    this.lease = await this.request("arm", { count: 3 }) as unknown as Lease;
+    this.lease = await this.requestAllowance(3);
+  }
+  private async requestAllowance(count: 1 | 3): Promise<Lease> {
+    const context = this.context;
+    const peer = context?.peer;
+    const epoch = this.permissionEpoch;
+    const generation = this.generation;
+    if (!peer?.request) throw new Error("Voice backend unavailable");
+    const lease = await peer.request("arm", { count }) as unknown as Lease;
+    if (epoch !== this.permissionEpoch || generation !== this.generation || !this.isConnected || scope(context) !== scope(this.context)) {
+      // Issuance may have completed after revocation. Revoke only that late token,
+      // not a newer allowance another explicit action may have created.
+      await peer.request("disarm", { token: lease.token }).catch(() => {});
+      throw new Error("Approval was revoked while awaiting the server; instruction was not sent.");
+    }
+    return lease;
   }
   private async execute(command: Command, manual = false) {
-    const lease = manual ? await this.request("arm", { count: 1 }) as unknown as Lease : this.lease;
+    const lease = manual ? await this.requestAllowance(1) : this.lease;
     if (!lease) throw new Error("No active allowance");
     // Spend the local allowance on an attempted send as well: timeouts must not cause blind retries.
     if (!manual) this.lease = { ...lease, remaining: Math.max(0, lease.remaining - 1) };
@@ -135,7 +156,7 @@ export class VoicePanel extends LitElement {
     switch (name) {
       case "list_workers": await this.refresh(); return this.workers.map(w => ({ id: w.id, title: w.title, status: w.status, revision: w.revision, model: w.model }));
       case "read_worker": return this.request("read", { workerId: uuid(data.workerId) });
-      case "start_worker": return this.propose({ kind: "start", requestId: crypto.randomUUID(), title: text(data.title, "title", 100), prompt: text(data.prompt, "prompt"), ...(data.model ? { model: text(data.model, "model", 256) } : {}) });
+      case "start_worker": return this.propose({ kind: "start", requestId: crypto.randomUUID(), title: text(data.title, "title", 100), prompt: text(data.prompt, "prompt"), ...(data.model ? { model: text(data.model, "model", MAX_MODEL) } : {}) });
       case "reply_worker": {
         if (!Number.isSafeInteger(data.expectedRevision)) throw new Error("Use latest worker revision");
         return this.propose({ kind: "reply", requestId: crypto.randomUUID(), workerId: uuid(data.workerId), expectedRevision: Number(data.expectedRevision), prompt: text(data.prompt, "prompt") });

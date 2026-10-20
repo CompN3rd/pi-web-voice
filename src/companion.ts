@@ -1,17 +1,17 @@
 import { createHash } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { MARKER, MAX_TEXT, REPLY, REQUEST, record, text, uuid } from "./protocol.js";
+import { MARKER, MAX_TEXT, MAX_MODEL, REPLY, REQUEST, record, text, uuid } from "./protocol.js";
 
 type Status = "running" | "needs-input" | "completed" | "failed" | "unknown";
 interface Snapshot { sequence: number; workerId: string; status: Status; text: string; question?: string; model: string }
-interface Request { requestId: string; operation: "status" | "models" | "start" | "reply"; workerId?: string; prompt?: string; title?: string; model?: string }
+interface Request { requestId: string; operation: "status" | "models" | "start" | "reply"; workerId?: string; prompt?: string; title?: string; model?: string; expectedSequence?: number }
 interface Receipt { requestId: string; digest: string }
 interface State { snapshot: Snapshot; receipts: Receipt[] }
 interface Turn { prompt: string; started: boolean; userSeen: boolean; text: string; stopReason: string; question?: string }
 interface Response { ok: boolean; snapshot?: Snapshot; models?: { id: string; name: string }[]; error?: string }
 const MAX_RECEIPTS = 128;
-const MAX_MODEL = 512;
+export const START_TIMEOUT_MS = 15_000;
 class RequestError extends Error {}
 // Budget serialized text, including JSON escaping, below the peer's 64 KiB envelope.
 function outputText(value: string): string {
@@ -38,9 +38,11 @@ function parseRequest(value: unknown): Request {
   const operation = data.operation;
   if (operation !== "status" && operation !== "models" && operation !== "start" && operation !== "reply") throw new RequestError("Invalid operation");
   const allowed = operation === "models" ? ["requestId", "operation"] : operation === "status"
-    ? ["requestId", "operation", "workerId"] : ["requestId", "operation", "workerId", "prompt", "title", "model"];
+    ? ["requestId", "operation", "workerId"] : ["requestId", "operation", "workerId", "prompt", "title", "model", "expectedSequence"];
   if (Object.keys(data).some((key) => !allowed.includes(key))) throw new RequestError("Unexpected request field");
+  if (operation === "reply" && (!Number.isSafeInteger(data.expectedSequence) || Number(data.expectedSequence) < 1)) throw new RequestError("Expected companion sequence required");
   return { requestId, operation,
+    ...(operation === "reply" ? { expectedSequence: Number(data.expectedSequence) } : {}),
     ...(operation === "models" ? {} : { workerId: uuid(data.workerId) }),
     ...(operation === "start" || operation === "reply" ? {
       prompt: bounded(data.prompt, "prompt", MAX_TEXT),
@@ -74,6 +76,8 @@ export default function companion(pi: ExtensionAPI): void {
   let turn: Turn | undefined;
   let epoch = 0;
   let promptVersion = 0;
+  let startTimer: ReturnType<typeof setTimeout> | undefined;
+  const clearStartTimer = () => { clearTimeout(startTimer); startTimer = undefined; };
   let pending: { requestId: string; digest: string; result: Promise<Response> } | undefined;
   const snapshot = () => state ? { ...state.snapshot } : undefined;
   const persist = () => { if (state) pi.appendEntry(MARKER, structuredClone(state)); };
@@ -87,31 +91,48 @@ export default function companion(pi: ExtensionAPI): void {
     publish();
   };
   const interfere = () => {
+    clearStartTimer();
     promptVersion++;
     if (!state) return;
     turn = undefined;
     transition("unknown", "An unrelated prompt changed this worker conversation.");
   };
-  const load = (ctx: ExtensionContext) => {
+  const load = (ctx: ExtensionContext, treeChanged = false) => {
+    clearStartTimer();
+    const previousSequence = state?.snapshot.sequence ?? 0;
     epoch++;
     context = ctx;
     state = undefined;
     turn = undefined;
     pending = undefined;
-    const marker = [...ctx.sessionManager.getBranch()].reverse().find((entry) => entry.type === "custom" && entry.customType === MARKER);
+    const branchMarker = [...ctx.sessionManager.getBranch()].reverse().find((entry) => entry.type === "custom" && entry.customType === MARKER);
+    const marker = branchMarker ?? [...ctx.sessionManager.getEntries()].reverse().find((entry) => entry.type === "custom" && entry.customType === MARKER);
     if (marker?.type !== "custom") return;
     try { state = restore(marker.data); } catch { return; }
-    if (state.snapshot.status === "running") transition("unknown", "Worker execution was interrupted; inspect the conversation before replying.");
+    // A branch's marker is not a lifetime sequence clock. Scan all session markers
+    // for this worker, and explicitly invalidate any tree change/rolled-back state.
+    let maximum = Math.max(previousSequence, state.snapshot.sequence);
+    for (const entry of ctx.sessionManager.getEntries()) {
+      if (entry.type !== "custom" || entry.customType !== MARKER) continue;
+      try { const saved = restore(entry.data); if (saved.snapshot.workerId === state.snapshot.workerId) maximum = Math.max(maximum, saved.snapshot.sequence); } catch { /* malformed historical marker */ }
+    }
+    const rolledBack = maximum > state.snapshot.sequence;
+    state.snapshot.sequence = maximum;
+    if (treeChanged || rolledBack || !branchMarker) {
+      state.snapshot = { ...state.snapshot, sequence: maximum + 1, status: "unknown", text: "Session branch changed; inspect the conversation. Voice follow-ups are blocked.", question: undefined };
+      persist(); publish();
+    } else if (state.snapshot.status === "running") transition("unknown", "Worker execution was interrupted; inspect the conversation before replying.");
     else publish();
   };
   pi.on("session_start", (_event, ctx) => { load(ctx); });
-  pi.on("session_tree", (_event, ctx) => { load(ctx); });
+  pi.on("session_tree", (_event, ctx) => { load(ctx, true); });
   pi.on("session_shutdown", () => {
+    clearStartTimer();
     try { if (state?.snapshot.status === "running") transition("unknown", "Worker execution was interrupted by session shutdown."); }
     finally { epoch++; context = undefined; state = undefined; turn = undefined; pending = undefined; }
   });
   pi.on("before_agent_start", (event) => {
-    if (turn && !turn.started && event.messageType === "user" && event.prompt === turn.prompt && !event.images?.length) turn.started = true;
+    if (turn && !turn.started && event.messageType === "user" && event.prompt === turn.prompt && !event.images?.length) { turn.started = true; if (turn.userSeen) clearStartTimer(); }
     else interfere();
   });
   pi.on("message_start", (event) => {
@@ -119,7 +140,7 @@ export default function companion(pi: ExtensionAPI): void {
     const content = event.message.content;
     const plain = typeof content === "string" ? content : content.every((part) => part.type === "text")
       ? content.map((part) => part.type === "text" ? part.text : "").join("") : undefined;
-    if (turn && !turn.userSeen && plain === turn.prompt) turn.userSeen = true;
+    if (turn && !turn.userSeen && plain === turn.prompt) { turn.userSeen = true; if (turn.started) clearStartTimer(); }
     else interfere();
   });
   pi.on("message_end", (event) => {
@@ -136,6 +157,7 @@ export default function companion(pi: ExtensionAPI): void {
   });
   // agent_end is not final: Pi may retry or compact before settlement.
   pi.on("agent_settled", (event) => {
+    clearStartTimer();
     if (!turn) return;
     const result = turn;
     turn = undefined;
@@ -167,7 +189,10 @@ export default function companion(pi: ExtensionAPI): void {
     if (request.operation === "start") {
       if (state || ctx.sessionManager.getEntries().some((entry) => entry.type === "message" || entry.type === "custom" && entry.customType === MARKER)
         || ctx.sessionManager.getBranch().some((entry) => entry.type === "compaction" || entry.type === "branch_summary")) throw new RequestError("Start requires a fresh empty conversation with no worker marker");
-    } else if (!state || state.snapshot.workerId !== request.workerId) throw new RequestError("Worker does not match this conversation");
+    } else {
+      if (!state || state.snapshot.workerId !== request.workerId) throw new RequestError("Worker does not match this conversation");
+      if (state.snapshot.sequence !== request.expectedSequence || !["completed", "needs-input", "failed"].includes(state.snapshot.status)) throw new RequestError("Worker state changed; refresh and inspect before replying");
+    }
   }
   async function execute(request: Request, hash: string): Promise<Response> {
     const ctx = context;
@@ -179,6 +204,7 @@ export default function companion(pi: ExtensionAPI): void {
       checkScope(request, ctx);
       if ((state?.receipts.length ?? 0) >= MAX_RECEIPTS) throw new RequestError("Worker receipt limit (128) reached; create a new worker");
       let model = ctx.model;
+      if (request.model === undefined && (!model || !ctx.modelRegistry.getAvailable().some(candidate => candidate.provider === model!.provider && candidate.id === model!.id))) throw new RequestError("No usable session model selected");
       if (request.model !== undefined) {
         model = ctx.modelRegistry.getAvailable().find((candidate) => `${candidate.provider}/${candidate.id}` === request.model);
         if (!model) throw new RequestError("Requested model is not available");
@@ -197,16 +223,24 @@ export default function companion(pi: ExtensionAPI): void {
       if (request.operation === "start") pi.setSessionName(request.title ?? "Voice worker");
       turn = { prompt: INSTRUCTION + request.prompt!, started: false, userSeen: false, text: "", stopReason: "" };
       publish();
+      const expectedTurn = turn;
+      startTimer = setTimeout(() => {
+        if (generation !== epoch || turn !== expectedTurn || (expectedTurn.started && expectedTurn.userSeen)) return;
+        turn = undefined; startTimer = undefined;
+        transition("unknown", "Prompt delivery was not observed within 15 seconds. Inspect the conversation; no automatic retry was attempted.");
+      }, START_TIMEOUT_MS);
+      startTimer.unref?.();
       pi.sendUserMessage(turn.prompt);
       return { ok: true, snapshot: snapshot() };
     } catch (error) {
       if (accepted && generation === epoch) {
+        clearStartTimer();
         turn = undefined;
         transition("failed", "Worker prompt delivery failed. Inspect the conversation before continuing.");
         return { ok: false, snapshot: snapshot(), error: "Worker prompt delivery failed" };
       }
       // Errors from provider/model APIs can contain secrets. Only expose our fixed validation errors.
-      const safe = error instanceof Error && ["Session must be idle with no pending messages", "Start requires a fresh empty conversation with no worker marker", "Worker does not match this conversation", "Worker receipt limit (128) reached; create a new worker", "Requested model is not available", "Requested model authentication is unavailable", "Session changed while selecting the model", "No usable session model selected"].includes(error.message);
+      const safe = error instanceof Error && ["Worker state changed; refresh and inspect before replying", "Session must be idle with no pending messages", "Start requires a fresh empty conversation with no worker marker", "Worker does not match this conversation", "Worker receipt limit (128) reached; create a new worker", "Requested model is not available", "Requested model authentication is unavailable", "Session changed while selecting the model", "No usable session model selected"].includes(error.message);
       return { ok: false, error: safe ? (error as Error).message : "Worker request failed" };
     }
   }

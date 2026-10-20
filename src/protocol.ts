@@ -2,6 +2,7 @@ export const REQUEST = "compn3rd.voice:request:v1";
 export const REPLY = "compn3rd.voice:reply:v1";
 export const MARKER = "compn3rd.voice:worker:v1";
 export const MAX_TEXT = 16_000;
+export const MAX_MODEL = 512;
 export type WorkerStatus = "starting" | "running" | "needs-input" | "completed" | "failed" | "unknown";
 export interface Worker {
   id: string;

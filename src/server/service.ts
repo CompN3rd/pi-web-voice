@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { PiWebHostPiSessionsV1, PiWebHostPiSessionEventsV1, PiWebHostPiSessionConnection } from "@jmfederico/pi-web/server-plugin-api";
-import { REQUEST, REPLY, MAX_TEXT, record, text, uuid, type Command, type Worker, type Lease } from "../protocol.ts";
+import { REQUEST, REPLY, MAX_TEXT, MAX_MODEL, record, text, uuid, type Command, type Worker, type Lease } from "../protocol.ts";
 import { Store, scopeKey, fingerprint, type Ledger } from "./store.ts";
 
 type Scope = { projectId: string; workspaceId: string };
@@ -9,7 +9,7 @@ const errorText = (error: unknown) => (error instanceof Error ? error.message : 
 export function parseCommand(input: unknown): Command {
   const c = record(input);
   const base = { requestId: uuid(c.requestId), prompt: text(c.prompt, "prompt") };
-  if (c.kind === "start") return { ...base, kind: "start", title: text(c.title, "title", 100), ...(c.model ? { model: text(c.model, "model", 256) } : {}) };
+  if (c.kind === "start") return { ...base, kind: "start", title: text(c.title, "title", 100), ...(c.model ? { model: text(c.model, "model", MAX_MODEL) } : {}) };
   if (c.kind === "reply" && Number.isSafeInteger(c.expectedRevision) && Number(c.expectedRevision) > 0) return { ...base, kind: "reply", workerId: uuid(c.workerId), expectedRevision: Number(c.expectedRevision) };
   throw new Error("Invalid command");
 }
@@ -18,7 +18,7 @@ function parseSnapshot(input: unknown): Snapshot {
   if (!["running", "needs-input", "completed", "failed", "unknown"].includes(String(s.status))) throw new Error("Invalid worker status");
   if (typeof s.text !== "string" || s.text.length > MAX_TEXT) throw new Error("Invalid worker text");
   if (!Number.isSafeInteger(s.sequence) || Number(s.sequence) < 0) throw new Error("Invalid companion sequence");
-  return { workerId: uuid(s.workerId), sequence: Number(s.sequence), status: s.status as Snapshot["status"], text: s.text, model: typeof s.model === "string" ? s.model.slice(0, 256) : "default", ...(s.question ? { question: text(s.question, "question", 4000) } : {}) };
+  return { workerId: uuid(s.workerId), sequence: Number(s.sequence), status: s.status as Snapshot["status"], text: s.text, model: typeof s.model === "string" && s.model.length <= MAX_MODEL ? s.model : "default", ...(s.question ? { question: text(s.question, "question", MAX_TEXT) } : {}) };
 }
 
 /** Durable admission, exact session correlation, no automatic mutation retries. */
@@ -29,6 +29,7 @@ export class VoiceService {
   private ledgers = new Map<string, Ledger>();
   private disposed = false;
   private persistenceError = "";
+  private tasks = new Set<Promise<void>>();
   constructor(private store: Store, private sessions: PiWebHostPiSessionsV1, private events: PiWebHostPiSessionEventsV1, private lifetime: AbortSignal) {}
   private serial<T>(fn: () => Promise<T>): Promise<T> {
     const result = this.queue.then(fn);
@@ -40,9 +41,10 @@ export class VoiceService {
     let value = this.ledgers.get(key);
     if (!value) {
       value = await this.store.load(key);
-      for (const worker of value.workers) if (["starting", "running"].includes(worker.status)) {
+      for (const worker of value.workers) {
+        if (["starting", "running"].includes(worker.status)) worker.text = "Backend restarted. Work may continue; inspect the exact session or refresh to reconcile.";
         worker.status = "unknown";
-        worker.text = "Backend restarted. Work may continue; inspect the exact session or refresh to reconcile.";
+        delete worker.companionSequence;
         worker.revision++;
       }
       this.ledgers.set(key, value);
@@ -60,15 +62,18 @@ export class VoiceService {
     this.leases.set(scopeKey(scope.projectId, scope.workspaceId), value);
     return { ...value };
   }
-  disarm(scope: Scope) { this.leases.delete(scopeKey(scope.projectId, scope.workspaceId)); }
+  disarm(scope: Scope, token?: unknown) {
+    const key = scopeKey(scope.projectId, scope.workspaceId);
+    if (token === undefined || this.leases.get(key)?.token === token) this.leases.delete(key);
+  }
   async list(scope: Scope): Promise<Worker[]> {
     const workers = await this.serial(async () => structuredClone((await this.ledger(scope)).workers));
     // Reconcile only already-hosted conversations. Public connect never opens saved sessions.
-    await Promise.all(workers.filter(w => w.sessionId && ["starting", "running", "unknown"].includes(w.status)).map(async w => {
+    await Promise.all(workers.filter(w => w.sessionId).map(async w => {
       try {
         const connection = await this.connect(scope, w);
         const result = await this.rpc(connection, { operation: "status", workerId: w.id });
-        if (result.snapshot) await this.update(scope, w.id, parseSnapshot(result.snapshot));
+        if (result.snapshot) await this.update(scope, w.id, parseSnapshot(result.snapshot), connection);
       } catch { /* Unknown stays unknown. A transport failure is not completion. */ }
     }));
     return this.serial(async () => structuredClone((await this.ledger(scope)).workers));
@@ -78,7 +83,7 @@ export class VoiceService {
     try {
       const response = await this.rpc(connection, { operation: "models" });
       if (!Array.isArray(response.models)) throw new Error("Invalid model catalog");
-      return response.models.slice(0, 1000).map(value => { const m = record(value); return { id: text(m.id, "model ID", 256), name: text(m.name, "model name", 256) }; });
+      return response.models.map(value => { const m = record(value); return { id: text(m.id, "model ID", MAX_MODEL), name: text(m.name, "model name", MAX_MODEL) }; });
     } finally { connection.close(); }
   }
   async execute(scope: Scope, input: unknown): Promise<Worker> {
@@ -120,7 +125,9 @@ export class VoiceService {
       // Never start side effects until admission is durable. A failed save leaves the
       // in-memory receipt uncertain and blocks duplicate execution in this process.
       await this.save(scope, ledger);
-      void this.dispatch(scope, structuredClone(worker), command).catch(() => {});
+      const task = this.dispatch(scope, structuredClone(worker), command).catch(() => {});
+      this.tasks.add(task);
+      void task.finally(() => this.tasks.delete(task));
       return structuredClone(worker);
     });
   }
@@ -139,8 +146,8 @@ export class VoiceService {
         });
       }
       const connection = await this.connect(scope, worker);
-      const response = await this.rpc(connection, { operation: command.kind, workerId: worker.id, prompt: command.prompt, ...(command.title ? { title: command.title } : {}), ...(command.model ? { model: command.model } : {}) }, command.requestId);
-      if (response.snapshot) await this.update(scope, worker.id, parseSnapshot(response.snapshot));
+      const response = await this.rpc(connection, { operation: command.kind, workerId: worker.id, prompt: command.prompt, ...(command.title ? { title: command.title } : {}), ...(command.model ? { model: command.model } : {}), ...(command.kind === "reply" ? { expectedSequence: worker.companionSequence } : {}) }, command.requestId);
+      if (response.snapshot) await this.update(scope, worker.id, parseSnapshot(response.snapshot), connection);
     } catch (error) {
       await this.update(scope, worker.id, { workerId: worker.id, status: "unknown", model: worker.model, text: `Delivery or tracking uncertain: ${errorText(error)}. Inspect Sessions before retrying; work was not cancelled.` });
     }
@@ -162,7 +169,7 @@ export class VoiceService {
         if (snapshot.workerId !== worker.id) return;
         // A reply to an earlier bounded RPC must not overwrite a newer async snapshot.
         if (value.requestId) return;
-        void this.update(scope, worker.id, snapshot).catch(() => {});
+        void this.update(scope, worker.id, snapshot, connection).catch(() => {});
       } catch { /* Ignore unrelated or malformed bus events. */ }
     });
     connection.signal.addEventListener("abort", () => {
@@ -170,22 +177,25 @@ export class VoiceService {
       void this.serial(async () => {
         const ledger = await this.ledger(scope);
         const saved = ledger.workers.find(w => w.id === worker.id);
-        if (saved && ["starting", "running"].includes(saved.status)) {
-          saved.status = "unknown"; saved.text = "Session event connection closed. Work may continue; inspect Sessions."; saved.revision++;
+        if (saved) {
+          if (["starting", "running"].includes(saved.status)) saved.text = "Session event connection closed. Work may continue; inspect Sessions.";
+          saved.status = "unknown"; delete saved.companionSequence; saved.revision++;
           await this.save(scope, ledger);
         }
       }).catch(() => {});
     }, { once: true });
     return connection;
   }
-  private update(scope: Scope, workerId: string, snapshot: Snapshot) {
+  private update(scope: Scope, workerId: string, snapshot: Snapshot, connection?: PiWebHostPiSessionConnection) {
     return this.serial(async () => {
+      if (connection?.signal.aborted) return;
       const ledger = await this.ledger(scope);
       const worker = ledger.workers.find(w => w.id === workerId);
       if (!worker || snapshot.workerId !== workerId) return;
+      if (snapshot.sequence === undefined && !["starting", "running", "unknown"].includes(worker.status)) return;
       if (snapshot.sequence !== undefined && snapshot.sequence <= (worker.companionSequence ?? -1)) return;
       if (snapshot.sequence !== undefined) worker.companionSequence = snapshot.sequence;
-      if (worker.status === snapshot.status && worker.text === snapshot.text && worker.question === snapshot.question && worker.model === snapshot.model) return;
+      if (snapshot.sequence === undefined && worker.status === snapshot.status && worker.text === snapshot.text && worker.question === snapshot.question && worker.model === snapshot.model) return;
       Object.assign(worker, { status: snapshot.status, text: snapshot.text, model: snapshot.model, updatedAt: new Date().toISOString(), revision: worker.revision + 1 });
       if (snapshot.question) worker.question = snapshot.question; else delete worker.question;
       await this.save(scope, ledger);
@@ -211,10 +221,13 @@ export class VoiceService {
       try { connection.emit(REQUEST, { ...payload, requestId }); } catch (error) { finish(new Error(errorText(error))); }
     });
   }
-  dispose() {
+  async dispose() {
     this.disposed = true;
     this.leases.clear();
     for (const connection of this.connections.values()) connection.close();
     this.connections.clear();
+    await this.queue; // Admissions may still register dispatch tasks after their durable save.
+    await Promise.all([...this.tasks]);
+    await this.queue; // Drain final uncertainty writes from dispatch/connection cleanup.
   }
 }

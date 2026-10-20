@@ -4,6 +4,7 @@
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "strict": true,
+    "useDefineForClassFields": false,
     "noEmit": true,
     "skipLibCheck": true,
     "lib": [

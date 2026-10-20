@@ -26,7 +26,9 @@ export function sessionConfig(settings: Record<string, unknown>) {
   };
 }
 export async function exchangeSdp(input: unknown, settings: Record<string, unknown>, signal: AbortSignal, request: typeof fetch = fetch): Promise<{ sdp: string }> {
-  const sdp = text(record(input).sdp, "SDP", 48_000);
+  const rawSdp = record(input).sdp;
+  text(rawSdp, "SDP", 48_000);
+  const sdp = rawSdp as string; // Preserve SDP CRLF terminator; generic text trimming corrupts protocol bytes.
   if (!sdp.startsWith("v=0") || Buffer.byteLength(sdp) > 48_000) throw new Error("Invalid SDP offer");
   const key = process.env.OPENAI_API_KEY;
   if (!key) throw new Error("Set OPENAI_API_KEY in the session-daemon environment; no browser API keys are accepted");
@@ -46,5 +48,6 @@ export async function exchangeSdp(input: unknown, settings: Record<string, unkno
   } finally { await reader.cancel(); }
   const answer = Buffer.concat(chunks).toString("utf8");
   if (!answer.startsWith("v=0")) throw new Error("Provider returned invalid SDP");
+  if (Buffer.byteLength(JSON.stringify({ sdp: answer })) > 60_000) throw new Error("Serialized SDP response too large");
   return { sdp: answer };
 }

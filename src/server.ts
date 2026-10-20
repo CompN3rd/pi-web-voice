@@ -39,13 +39,13 @@ export default {
           }
           case "models": result = await service.models(scope, record(context.input).sessionId); break;
           case "arm": result = service.arm(scope, record(context.input).count); break;
-          case "disarm": service.disarm(scope); result = { ok: true }; break;
+          case "disarm": service.disarm(scope, record(context.input).token); result = { ok: true }; break;
           case "execute": result = await service.execute(scope, context.input); break;
           default: throw new Error("Unsupported voice operation");
         }
         return result as JsonValue;
       } },
-      dispose() { service?.dispose(); service = undefined; },
+      async dispose() { await service?.dispose(); service = undefined; },
       health() { return service ? { status: "healthy" as const } : { status: "unhealthy" as const }; },
     };
   },

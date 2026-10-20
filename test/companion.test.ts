@@ -44,7 +44,8 @@ function harness(entries: any[] = []) {
   const event = async (name: string, value: object = {}) => handlers.get(name)?.({ type: name, ...value }, ctx);
   const request = async (value: object) => {
     const requestId = "requestId" in value ? value.requestId : randomUUID();
-    await requestHandler!({ requestId, ...value });
+    const expected = "operation" in value && value.operation === "reply" ? { expectedSequence: h.entries.at(-1)?.data?.snapshot?.sequence ?? 1 } : {};
+    await requestHandler!({ requestId, ...expected, ...value });
     return replies.filter((reply) => reply.requestId === requestId).at(-1);
   };
   const start = (value: object = {}) => request({ operation: "start", workerId, prompt: "Do the task", ...value });
@@ -62,6 +63,35 @@ function harness(entries: any[] = []) {
 const workerId = "11111111-1111-4111-8111-111111111111";
 const otherWorker = "22222222-2222-4222-8222-222222222222";
 
+test("fire-and-forget delivery without lifecycle confirmation becomes unknown, never retried", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const h = harness(); await h.event("session_start"); await h.start();
+  assert.equal((await h.status()).snapshot.status, "running");
+  t.mock.timers.tick(15_001);
+  assert.equal((await h.status()).snapshot.status, "unknown");
+  assert.equal(h.sent.length, 1);
+  assert.equal((await h.request({ operation: "reply", workerId, prompt: "Do not resend" })).ok, false);
+});
+test("preparation event alone does not cancel delivery watchdog, confirmed user message does", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const h = harness(); await h.event("session_start"); await h.start();
+  await h.event("before_agent_start", { messageType: "user", prompt: h.sent.at(-1) });
+  t.mock.timers.tick(15_001);
+  assert.equal((await h.status()).snapshot.status, "unknown"); assert.equal(h.sent.length, 1);
+  assert.equal((await h.request({ operation: "reply", workerId, prompt: "Do not resend" })).ok, false);
+  const normal = harness(); await normal.event("session_start"); await normal.start(); await normal.begin();
+  t.mock.timers.tick(15_001);
+  assert.equal((await normal.status()).snapshot.status, "running");
+  await normal.assistant(); await normal.event("agent_settled");
+  assert.equal((await normal.status()).snapshot.status, "completed");
+});
+test("companion rejects changed sequence at the final follow-up boundary", async () => {
+  const h = harness(); await h.event("session_start"); await h.start(); await h.begin(); await h.assistant(); await h.event("agent_settled");
+  const before = (await h.status()).snapshot;
+  await h.event("before_agent_start", { messageType: "user", prompt: "External work" });
+  const reply = await h.request({ operation: "reply", workerId, expectedSequence: before.sequence, prompt: "Stale" });
+  assert.equal(reply.ok, false); assert.match(reply.error, /state changed/); assert.equal(h.sent.length, 1);
+});
 test("companion start persists intent before delivery; settlement, not agent_end, completes", async () => {
   const h = harness();
   await h.event("session_start");

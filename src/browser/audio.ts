@@ -16,17 +16,21 @@ export class AudioConnection {
   private playing = false;
   private speaking = false;
   private replyNeeded = false;
+  private pendingTools = 0;
+  private startupTimer?: ReturnType<typeof setTimeout>;
   private notifications: string[] = [];
   private closed = false;
   private muted = false;
   constructor(private audio: HTMLAudioElement, private callbacks: AudioCallbacks) {}
   async start(exchange: (sdp: string, signal: AbortSignal) => Promise<string>) {
-    if (!globalThis.isSecureContext || !navigator.mediaDevices?.getUserMedia) throw new Error("Microphone requires HTTPS (or localhost on this device). Plain LAN HTTP is not sufficient.");
     try {
+      if (!globalThis.isSecureContext || !navigator.mediaDevices?.getUserMedia) throw new Error("Microphone requires HTTPS (or localhost on this device). Plain LAN HTTP is not sufficient.");
       this.callbacks.status("Requesting microphone permission…");
+      this.startupTimer = setTimeout(() => this.fail("Voice startup timed out. Reconnect explicitly."), 30_000);
       const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false });
       if (this.closed) { stream.getTracks().forEach(t => t.stop()); return; }
       this.stream = stream;
+      for (const track of stream.getAudioTracks()) track.enabled = !this.muted;
       const peer = this.peer = new RTCPeerConnection();
       for (const track of stream.getTracks()) {
         peer.addTrack(track, stream);
@@ -41,10 +45,10 @@ export class AudioConnection {
         if (["failed", "disconnected"].includes(peer.connectionState)) this.fail("Voice disconnected. Workers continue; reconnect explicitly.");
       };
       const channel = this.channel = peer.createDataChannel("oai-events");
-      channel.onmessage = event => { void this.receive(event.data); };
+      channel.onmessage = event => { void this.receive(event.data).catch(() => this.fail("Voice event processing failed; inspect worker state before retrying.")); };
       channel.onerror = () => this.fail("Voice data channel failed.");
       channel.onclose = () => { if (!this.closed) this.fail("Voice channel closed; workers continue."); };
-      channel.onopen = () => this.callbacks.status("Listening · microphone audio is being sent to OpenAI");
+      channel.onopen = () => { clearTimeout(this.startupTimer); this.callbacks.status(this.muted ? "Microphone muted · no captured audio transmitted; tap Resume to speak" : "Listening · microphone audio is being sent to OpenAI"); };
       const offer = await peer.createOffer();
       await peer.setLocalDescription(offer);
       const sdp = await exchange(offer.sdp!, this.abort.signal);
@@ -69,19 +73,21 @@ export class AudioConnection {
       case "output_audio_buffer.started": this.playing = true; break;
       case "output_audio_buffer.stopped": case "output_audio_buffer.cleared": this.playing = false; this.flush(); break;
       case "input_audio_buffer.speech_started": this.speaking = true; break;
-      case "input_audio_buffer.speech_stopped": this.speaking = false; break;
+      case "input_audio_buffer.speech_stopped": this.speaking = false; this.responding = true; break;
       case "response.output_audio_transcript.done":
         if (typeof event.transcript === "string") this.callbacks.caption(event.transcript.slice(0, 8000)); break;
       case "response.function_call_arguments.done": {
         if (typeof event.call_id !== "string" || typeof event.name !== "string" || typeof event.arguments !== "string" || event.arguments.length > 20_000) return;
         if (this.calls.has(event.call_id)) return; // Provider event replay cannot execute a mutation twice.
         if (this.calls.size >= 100) { this.fail("Voice tool limit reached; reconnect explicitly."); return; }
+        this.pendingTools++;
         const task = (async () => {
           try { return await this.callbacks.tool(event.name, JSON.parse(event.arguments), event.call_id); }
           catch (error) { return { error: error instanceof Error ? error.message : String(error) }; }
         })();
         this.calls.set(event.call_id, task);
         const result = await task;
+        this.pendingTools--;
         if (this.closed) return;
         try {
           this.send({ type: "conversation.item.create", item: { type: "function_call_output", call_id: event.call_id, output: JSON.stringify(result) } });
@@ -98,7 +104,7 @@ export class AudioConnection {
     this.flush();
   }
   private flush() {
-    if (this.closed || this.responding || this.playing || this.speaking || this.channel?.readyState !== "open") return;
+    if (this.closed || this.pendingTools > 0 || this.responding || this.playing || this.speaking || this.channel?.readyState !== "open") return;
     if (this.replyNeeded) {
       this.replyNeeded = false; this.responding = true;
       this.send({ type: "response.create" });
@@ -126,7 +132,7 @@ export class AudioConnection {
   private fail(message: string) { this.close(); this.callbacks.status(message); }
   close() {
     if (this.closed) return;
-    this.closed = true; this.abort.abort(); clearTimeout(this.timer);
+    this.closed = true; this.abort.abort(); clearTimeout(this.timer); clearTimeout(this.startupTimer);
     this.channel?.close(); this.peer?.close();
     this.stream?.getTracks().forEach(t => t.stop());
     this.audio.pause(); this.audio.srcObject = null;
