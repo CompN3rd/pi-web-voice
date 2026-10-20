@@ -8,7 +8,7 @@ const stats = {
   stops: 0, captures: 0, preparations: 0, terminations: 0, transcriptions: 0, instructions: 0,
   disarms: [] as string[], requests: [] as { workspaceId: string; operation: string; input: any }[],
   pendingPermission: false, pendingArm: false, pendingPrepare: false, pendingTranscript: false, pendingRead: false,
-  failExecute: false, spoken: [] as { text: string; voiceURI?: string }[], speechCancels: 0, navigations: [] as unknown[],
+  failSpeechCancel: false, failExecute: false, spoken: [] as { text: string; voiceURI?: string }[], speechCancels: 0, navigations: [] as unknown[],
 };
 let permissionResolve: (() => void) | undefined;
 let armResolve: (() => void) | undefined;
@@ -54,11 +54,11 @@ export { FixtureRecognizer as LocalRecognizer };
 const voice = (voiceURI: string, localService: boolean, lang = "en-US") => ({ voiceURI, name: voiceURI, localService, lang, default: false }) as SpeechSynthesisVoice;
 let voices = [voice("Local English", true), voice("Remote English", false), voice("Local French", true, "fr-FR")];
 const voiceEvents = new EventTarget();
-let activeUtterance: SpeechSynthesisUtterance | undefined;
+let lateSpeechEnd: (() => void) | undefined;
 Object.defineProperty(globalThis, "speechSynthesis", { configurable: true, value: {
   getVoices: () => voices,
-  speak(utterance: SpeechSynthesisUtterance) { activeUtterance = utterance; stats.spoken.push({ text: utterance.text, voiceURI: utterance.voice?.voiceURI }); },
-  cancel() { stats.speechCancels++; },
+  speak(utterance: SpeechSynthesisUtterance) { const onend = utterance.onend; lateSpeechEnd = () => onend?.call(utterance, {} as SpeechSynthesisEvent); stats.spoken.push({ text: utterance.text, voiceURI: utterance.voice?.voiceURI }); },
+  cancel() { stats.speechCancels++; if (stats.failSpeechCancel) throw new Error("Fixture speech cancellation failed"); },
   addEventListener: voiceEvents.addEventListener.bind(voiceEvents),
   removeEventListener: voiceEvents.removeEventListener.bind(voiceEvents),
 } });
@@ -89,6 +89,7 @@ function makeContext(workspaceId: string, sessionId = "catalog-session") {
           if (c.kind === "reply") {
             const w = workers.find(w => w.id === c.workerId);
             if (!w || w.revision !== c.expectedRevision) throw new Error("Stale fixture revision");
+            if (!["needs-input", "completed", "failed"].includes(w.status)) throw new Error("Worker is busy or its state is unknown; inspect session first");
             w.revision++; w.status = "running"; return structuredClone(w);
           }
           const w: Worker = { id: c.requestId, projectId: "project", workspaceId, sessionId: "exact-session", title: c.title, status: "running", model: c.model ?? "default", text: "", revision: 1, createdAt: "", updatedAt: "" };
@@ -96,7 +97,7 @@ function makeContext(workspaceId: string, sessionId = "catalog-session") {
         }
         case "read": {
           if (stats.pendingRead) await new Promise<void>(resolve => { readResolve = resolve; });
-          return { ...workers.find(w => w.id === input.workerId), text: resultText, status: "completed" };
+          return { ...workers.find(w => w.id === input.workerId), text: resultText };
         }
         case "models": return [{ id: "test/model", name: "Test model" }];
         default: throw new Error(`Unknown fixture request: ${operation}`);
@@ -112,6 +113,11 @@ function mount(workspaceId = "workspace-a", sessionId?: string) {
 mount();
 (globalThis as any).fixture = {
   stats, mount,
+  request(operation: string, input: any = {}) { return context.peer!.request!(operation, input); },
+  setWorkerStatus(status: Worker["status"]) {
+    const worker = workspaceWorkers.get(context.workspace.id)![0];
+    worker.status = status; worker.revision++;
+  },
   resolvePermission() { stats.pendingPermission = false; permissionResolve?.(); },
   resolveArm() { stats.pendingArm = false; armResolve?.(); },
   resolvePrepare() { stats.pendingPrepare = false; progress?.("Late pack progress"); prepareResolve?.(); },
@@ -121,7 +127,7 @@ mount();
   setResult(value: string) { resultText = value; },
   bumpRevision() { workspaceWorkers.get(context.workspace.id)![0].revision++; },
   removeLocalVoices() { voices = [voice("Remote English", false)]; voiceEvents.dispatchEvent(new Event("voiceschanged")); },
-  lateSpeechEnd() { activeUtterance?.onend?.({} as SpeechSynthesisEvent); },
+  lateSpeechEnd() { lateSpeechEnd?.(); },
   setMediaSupported(supported: boolean) { Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: supported ? media : undefined }); },
   setSecureContext(secure: boolean) { Object.defineProperty(globalThis, "isSecureContext", { configurable: true, value: secure }); },
   setHidden(hidden: boolean) { Object.defineProperty(document, "hidden", { configurable: true, value: hidden }); document.dispatchEvent(new Event("visibilitychange")); },

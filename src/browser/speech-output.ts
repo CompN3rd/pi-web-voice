@@ -5,6 +5,12 @@ export interface LocalSpeechOutputDependencies {
   clearTimeout: (timer: ReturnType<typeof setTimeout>) => void;
 }
 
+export const SPEECH_CANCELLATION_FAILURE = "Speech cancellation failed · audio may still be playing. Microphone and playback blocked; reload this page to recover.";
+
+// Synthesis is page-global. Failed cancellation stays unsafe across wrapper/panel
+// disposal; only a page reload resets this latch, never a late utterance callback.
+const cancellationSafety = new WeakMap<NonNullable<LocalSpeechOutputDependencies["synthesis"]>, { safe: boolean }>();
+
 function browserDependencies(): LocalSpeechOutputDependencies {
   return {
     synthesis: typeof speechSynthesis === "undefined" ? undefined : speechSynthesis,
@@ -26,13 +32,14 @@ function eligible(voice: SpeechSynthesisVoice): boolean {
 export class LocalSpeechOutput {
   private selected?: string;
   private disposed = false;
-  private cancellationFailed = false;
+  private readonly safety: { safe: boolean };
   private active?: { utterance: SpeechSynthesisUtterance; timer?: ReturnType<typeof setTimeout> };
   private readonly voicesChanged = () => {
     if (this.disposed) return;
+    if (!this.cancellationSafe) { this.onStatus(SPEECH_CANCELLATION_FAILURE); return; }
     if (this.selected && !this.resolveSelected()) {
       this.selected = undefined;
-      this.stop();
+      if (!this.stop()) { this.onStatus(SPEECH_CANCELLATION_FAILURE); return; }
       this.onStatus("Text only: selected local English voice is no longer available. Select a voice again.");
     } else if (!this.active) {
       this.onStatus(this.selected ? "Local English voice selected." : this.voices().length
@@ -43,12 +50,17 @@ export class LocalSpeechOutput {
 
   constructor(private readonly onStatus: (message: string) => void,
     private readonly dependencies: LocalSpeechOutputDependencies = browserDependencies()) {
+    const synthesis = this.dependencies.synthesis;
+    this.safety = (synthesis && cancellationSafety.get(synthesis)) ?? { safe: true };
+    if (synthesis) cancellationSafety.set(synthesis, this.safety);
     this.dependencies.synthesis?.addEventListener("voiceschanged", this.voicesChanged);
     this.voicesChanged();
   }
 
+  get cancellationSafe(): boolean { return this.safety.safe; }
+
   private inventory(): SpeechSynthesisVoice[] {
-    if (this.disposed || this.cancellationFailed || !this.dependencies.createUtterance) return [];
+    if (this.disposed || !this.cancellationSafe || !this.dependencies.createUtterance) return [];
     try { return this.dependencies.synthesis?.getVoices() ?? []; }
     catch { return []; }
   }
@@ -67,7 +79,12 @@ export class LocalSpeechOutput {
     if (this.disposed) return;
     const stopped = this.stop();
     this.selected = voiceURI || undefined;
-    if (!stopped || !this.resolveSelected()) {
+    if (!stopped) {
+      this.selected = undefined;
+      this.onStatus(SPEECH_CANCELLATION_FAILURE);
+      return;
+    }
+    if (!this.resolveSelected()) {
       this.selected = undefined;
       this.onStatus("Text only: choose an available local English voice.");
       return;
@@ -78,7 +95,7 @@ export class LocalSpeechOutput {
   speak(text: string): void {
     if (this.disposed) return;
     if (!this.stop()) {
-      this.onStatus("Text only: speech cancellation failed.");
+      this.onStatus(SPEECH_CANCELLATION_FAILURE);
       return;
     }
     // Reject rather than silently reading only part of a result. There is no queue.
@@ -100,8 +117,7 @@ export class LocalSpeechOutput {
       this.active = active;
       const finish = (message: string, cancel: boolean) => {
         if (this.disposed || this.active !== active) return;
-        this.stop(cancel);
-        this.onStatus(message);
+        this.onStatus(this.stop(cancel) ? message : SPEECH_CANCELLATION_FAILURE);
       };
       utterance.onend = () => finish("Local speech finished.", false);
       utterance.onerror = () => finish("Text only: local speech failed; no fallback was used.", true);
@@ -109,35 +125,36 @@ export class LocalSpeechOutput {
       this.dependencies.synthesis!.speak(utterance);
       if (this.active === active) this.onStatus("Speaking with the selected local English voice.");
     } catch {
-      this.stop();
-      this.onStatus("Text only: local speech failed; no fallback was used.");
+      this.onStatus(this.stop() ? "Text only: local speech failed; no fallback was used." : SPEECH_CANCELLATION_FAILURE);
     }
   }
 
   private stop(cancel = true): boolean {
     const active = this.active;
     this.active = undefined; // Fence callbacks before calling the browser's cancel().
-    if (!active) return !this.cancellationFailed;
+    if (!active) return this.cancellationSafe;
     active.utterance.onend = null;
     active.utterance.onerror = null;
     if (active.timer !== undefined) this.dependencies.clearTimeout(active.timer);
     if (cancel) {
       try { this.dependencies.synthesis?.cancel(); }
-      catch { this.cancellationFailed = true; return false; }
+      catch { this.safety.safe = false; return false; }
     }
-    return true;
+    return this.cancellationSafe;
   }
 
-  cancel(): void {
-    if (this.disposed) return;
-    this.onStatus(this.stop() ? "Local speech canceled." : "Text only: speech cancellation failed.");
+  cancel(): boolean {
+    if (this.disposed) return this.cancellationSafe;
+    const safe = this.stop();
+    this.onStatus(safe ? "Local speech canceled." : SPEECH_CANCELLATION_FAILURE);
+    return safe;
   }
 
-  dispose(): void {
-    if (this.disposed) return;
+  dispose(): boolean {
+    if (this.disposed) return this.cancellationSafe;
     this.disposed = true;
     this.selected = undefined;
     this.dependencies.synthesis?.removeEventListener("voiceschanged", this.voicesChanged);
-    this.stop();
+    return this.stop();
   }
 }

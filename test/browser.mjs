@@ -41,6 +41,11 @@ try {
     await page.waitForFunction(() => fixture.stats.instructions === 1);
     await button("Read text / question").waitFor();
   };
+  const settleWorker = async () => {
+    await page.evaluate(() => fixture.setWorkerStatus("completed"));
+    await button("Refresh status").click();
+    await page.getByLabel("Instruction target").locator("option").last().filter({ hasText: "completed" }).waitFor({ state: "attached" });
+  };
   const chooseReply = async () => {
     const value = await page.getByLabel("Instruction target").locator("option").last().getAttribute("value");
     await page.getByLabel("Instruction target").selectOption(value);
@@ -105,21 +110,44 @@ try {
   await page.getByText("Text only: selected local English voice is no longer available. Select a voice again.", { exact: true }).waitFor();
   assert.equal(await page.getByLabel("Local English voice").inputValue(), ""); checks++;
 
-  // Explicit reply ID/revision, never freeform routing; revision changes invalidate drafts.
+  // Explicit settlement advances the stored revision before a successful reply.
+  await settleWorker();
   await chooseReply();
   await unchangedDraft();
   await prompt().fill("Reply to exactly this worker");
   await button("Propose exact instruction").click();
-  await page.getByRole("article", { name: "Exact proposal" }).getByText(/revision 1/).waitFor();
+  await page.getByRole("article", { name: "Exact proposal" }).getByText(/revision 2/).waitFor();
   await button("Approve exact instruction").click();
   await page.waitForFunction(() => fixture.stats.instructions === 2);
   const reply = await page.evaluate(() => fixture.stats.requests.filter(r => r.operation === "execute").at(-1).input.command);
-  assert.equal(reply.kind, "reply"); assert.equal(reply.workerId, sent.requestId); assert.equal(reply.expectedRevision, 1); assert.equal(reply.model, undefined); checks++;
+  assert.equal(reply.kind, "reply"); assert.equal(reply.workerId, sent.requestId); assert.equal(reply.expectedRevision, 2); assert.equal(reply.model, undefined); checks++;
   await page.getByText("Worker revision changed · draft discarded. Select an exact target again.", { exact: true }).waitFor();
-  await chooseReply(); await prompt().fill("Old revision draft"); await button("Propose exact instruction").click();
+  await settleWorker(); await chooseReply(); await prompt().fill("Old revision draft"); await button("Propose exact instruction").click();
   await page.evaluate(() => fixture.bumpRevision()); await button("Refresh status").click();
   await page.getByText("Worker revision changed · draft discarded. Select an exact target again.", { exact: true }).waitFor();
   await unchangedDraft();
+
+  // The fixture rejects running/unknown replies even when UI eligibility is bypassed.
+  for (const status of ["running", "unknown"]) {
+    await reset(); await createWorker();
+    if (status === "unknown") {
+      await page.evaluate(() => fixture.setWorkerStatus("unknown"));
+      await button("Refresh status").click();
+      await page.getByLabel("Instruction target").locator("option").last().filter({ hasText: "unknown" }).waitFor({ state: "attached" });
+    }
+    assert.equal(await page.getByLabel("Instruction target").locator("option").last().getAttribute("disabled"), "");
+    const rejection = await page.evaluate(async () => {
+      const [worker] = await fixture.request("list");
+      let error = "";
+      try {
+        await fixture.request("execute", { command: { kind: "reply", requestId: crypto.randomUUID(), workerId: worker.id, expectedRevision: worker.revision, prompt: "Must reject" } });
+      } catch (failure) { error = failure.message; }
+      return { error, before: worker, after: (await fixture.request("list"))[0] };
+    });
+    assert.match(rejection.error, /busy or its state is unknown/);
+    assert.equal(rejection.before.status, status);
+    assert.deepEqual(rejection.after, rejection.before); checks++;
+  }
 
   // Maximum-size PCM automatically finishes, but never dispatches.
   await reset(); await prepare(); await start();
@@ -181,7 +209,7 @@ try {
 
   // Target/model changes during inference invalidate the captured target, never rebind.
   for (const selection of ["target", "model", "session"]) {
-    await reset(); await createWorker(); await prepare(); await start();
+    await reset(); await createWorker(); await settleWorker(); await prepare(); await start();
     await page.evaluate(() => { fixture.stats.pendingTranscript = true; });
     await button("Finish recording").click();
     await page.getByText("Transcribing on this device · microphone off…", { exact: true }).waitFor();
@@ -194,7 +222,7 @@ try {
   }
 
   // A polled revision change also cancels an in-flight utterance bound to that reply.
-  await reset(); await createWorker(); await chooseReply(); await prepare(); await start();
+  await reset(); await createWorker(); await settleWorker(); await chooseReply(); await prepare(); await start();
   await page.evaluate(() => { fixture.stats.pendingTranscript = true; });
   await button("Finish recording").click();
   await page.getByText("Transcribing on this device · microphone off…", { exact: true }).waitFor();
@@ -260,7 +288,76 @@ try {
     await page.waitForFunction(() => fixture.stats.speechCancels === 1);
     await page.evaluate(() => fixture.lateSpeechEnd());
     assert.equal(await page.getByText("Local speech finished.", { exact: true }).count(), 0); checks++;
+    if (cancellation === "hide") await page.evaluate(() => fixture.setHidden(false));
+    if (cancellation === "unmount") await page.evaluate(() => fixture.mount());
+    await prepare(); await start();
+    assert.equal(await page.evaluate(() => fixture.stats.captures), 1); checks++;
   }
+  // Failed page-global cancellation survives every output owner lifecycle. Late
+  // callbacks and fresh wrappers cannot authorize preparation, capture or playback.
+  for (const cancellation of ["off", "target", "model", "context", "session", "revision", "hide", "remount"]) {
+    await reset(); await createWorker(); await settleWorker();
+    if (cancellation === "revision") await chooseReply();
+    await prepare();
+    await page.getByLabel("Local English voice").selectOption("Local English");
+    await button("Speak worker status").click();
+    await page.evaluate(() => { fixture.stats.failSpeechCancel = true; });
+    if (cancellation === "off") await button("Cancel / voice off").click();
+    else if (cancellation === "target") await chooseReply();
+    else if (cancellation === "model") await page.getByLabel("Worker model (empty = Pi default)").fill("test/other");
+    else if (cancellation === "context") await page.evaluate(() => fixture.mount("workspace-b"));
+    else if (cancellation === "session") await page.evaluate(() => fixture.mount("workspace-a", "different-session"));
+    else if (cancellation === "revision") { await page.evaluate(() => fixture.bumpRevision()); await button("Refresh status").click(); }
+    else if (cancellation === "hide") await page.evaluate(() => fixture.setHidden(true));
+    else await page.evaluate(() => fixture.unmount());
+    await page.waitForFunction(() => fixture.stats.speechCancels === 1);
+    await page.evaluate(() => fixture.lateSpeechEnd());
+    if (cancellation === "hide") await page.evaluate(() => fixture.setHidden(false));
+    if (cancellation === "remount") await page.evaluate(() => fixture.mount());
+    await page.getByText(/Speech cancellation failed.*audio may still be playing/).first().waitFor();
+    assert.equal(await button("Prepare local English speech pack").isEnabled(), false);
+    assert.equal(await button("Start recording").isEnabled(), false);
+    assert.equal(await button("Speak worker status").isEnabled(), false);
+    // Exercise handlers too: a disabled control is not the safety boundary.
+    const preparationError = await page.evaluate(async () => {
+      const panel = document.querySelector("compn3rd-voice-panel");
+      let error = "";
+      try { await panel.prepare(); } catch (failure) { error = failure.message; }
+      await panel.toggleRecording();
+      panel.speak("Must stay silent");
+      return error;
+    });
+    assert.match(preparationError, /Speech cancellation failed/);
+    await button("Stop speaking").click();
+    assert.equal(await page.evaluate(() => fixture.stats.captures), 0);
+    assert.equal(await page.evaluate(() => fixture.stats.preparations), 1);
+    assert.equal(await page.evaluate(() => fixture.stats.spoken.length), 1);
+    assert.equal(await page.getByText("Local speech canceled.", { exact: true }).count(), 0); checks++;
+  }
+  // Cancellation can also fail at the capture boundary with an already-ready
+  // recognizer: structured safety, not a status string, must prevent openCapture.
+  await reset(); await createWorker(); await prepare();
+  await page.getByLabel("Local English voice").selectOption("Local English");
+  await button("Speak worker status").click();
+  await page.evaluate(() => { fixture.stats.failSpeechCancel = true; });
+  await button("Start recording").click();
+  await page.getByRole("alert").filter({ hasText: "Speech cancellation failed" }).waitFor();
+  const captureError = await page.evaluate(async () => {
+    try { await document.querySelector("compn3rd-voice-panel").toggleRecording(); }
+    catch (failure) { return failure.message; }
+  });
+  assert.match(captureError, /Speech cancellation failed/);
+  assert.equal(await page.evaluate(() => fixture.stats.captures), 0);
+  assert.equal(await button("Start recording").isEnabled(), false); checks++;
+
+  // Reload is the documented recovery boundary, not another panel mount.
+  await reset(); await createWorker();
+  await page.getByLabel("Local English voice").selectOption("Local English");
+  await button("Speak worker status").click();
+  await prepare(); await start();
+  assert.equal(await page.evaluate(() => fixture.stats.captures), 1);
+  assert.equal(await page.evaluate(() => fixture.stats.speechCancels), 1); checks++;
+
   // Pending full-text read cannot populate a different workspace.
   await reset(); await createWorker();
   await page.evaluate(() => { fixture.stats.pendingRead = true; });

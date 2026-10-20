@@ -280,3 +280,65 @@ test("LocalSpeechOutput dispose removes listeners, cancels once and makes late c
   assert.equal(f.cancelCount, 1);
   assert.equal(f.utterances.length, 1);
 });
+
+test("LocalSpeechOutput cancellation safety survives disposal and wrappers sharing page synthesis", () => {
+  for (const shutdown of ["cancel", "dispose"] as const) {
+    const f = fixture();
+    const sibling = new LocalSpeechOutput(() => {}, { ...f.dependencies });
+    f.output.select("local-en");
+    f.output.speak("still possibly audible");
+    const late = callbacks(f.utterances[0]);
+    f.failCancel();
+    assert.equal(f.output[shutdown](), false);
+    assert.equal(f.output.cancellationSafe, false);
+    assert.equal(sibling.cancellationSafe, false);
+    assert.equal(f.output.dispose(), false);
+    const statuses: string[] = [];
+    const replacement = new LocalSpeechOutput(message => statuses.push(message), { ...f.dependencies });
+    assert.equal(replacement.cancellationSafe, false);
+    assert.match(statuses.at(-1)!, /audio may still be playing.*reload this page/);
+    late.end(); late.error(); f.voicesChanged();
+    assert.equal(replacement.cancel(), false);
+    replacement.select("local-en"); replacement.speak("must not queue");
+    sibling.select("local-en"); sibling.speak("also blocked");
+    assert.deepEqual(replacement.voices(), []);
+    assert.equal(f.utterances.length, 1);
+    assert.equal(f.cancelCount, 1);
+    assert.match(statuses.at(-1)!, /Speech cancellation failed/);
+    assert.equal(replacement.dispose(), false);
+    assert.equal(sibling.dispose(), false);
+    // An independent synthesis dependency represents a fresh document, not a wrapper.
+    const fresh = fixture();
+    assert.equal(fresh.output.cancellationSafe, true);
+    fresh.output.dispose();
+  }
+});
+
+test("LocalSpeechOutput successful cancellation does not block replacement output", () => {
+  const f = fixture();
+  f.output.select("local-en"); f.output.speak("first");
+  assert.equal(f.output.dispose(), true);
+  const replacement = new LocalSpeechOutput(() => {}, { ...f.dependencies });
+  assert.equal(replacement.cancellationSafe, true);
+  assert.equal(replacement.cancel(), true);
+  replacement.select("local-en"); replacement.speak("second");
+  assert.equal(f.utterances.length, 2);
+  assert.equal(replacement.dispose(), true);
+});
+
+test("LocalSpeechOutput cancellation failure is visible instead of ordinary error, timeout or voice loss", () => {
+  for (const outcome of ["error", "timeout", "voice-loss", "throw"] as const) {
+    const f = fixture();
+    f.output.select("local-en");
+    f.failCancel();
+    if (outcome === "throw") f.failSpeak();
+    f.output.speak("possibly still audible");
+    if (outcome === "error") callbacks(f.utterances[0]).error();
+    if (outcome === "timeout") [...f.timers.values()][0].callback();
+    if (outcome === "voice-loss") { f.setInventory([]); f.voicesChanged(); }
+    assert.equal(f.output.cancellationSafe, false);
+    assert.match(f.statuses.at(-1)!, /Speech cancellation failed.*audio may still be playing/);
+    assert.equal(f.output.cancel(), false);
+    f.output.dispose();
+  }
+});
