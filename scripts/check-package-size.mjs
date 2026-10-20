@@ -9,7 +9,7 @@ export const MAX_PACKAGE_BYTES = 16 * 1024 * 1024;
 export function checkInventory(files, label = "package") {
   let total = 0;
   for (const file of files) {
-    if (/(^|\/)models\/|\.(?:onnx|wasm|bin|ort)$|(^|\/)ort-wasm[^/]*\.(?:mjs|js)$/i.test(file.path)) {
+    if (/(^|\/)models\/|\.(?:onnx|wasm|bin|ort|pivoice)$|(^|\/)ort-wasm[^/]*\.(?:mjs|js)$/i.test(file.path)) {
       throw new Error(`${label} contains external speech payload: ${file.path}`);
     }
     total += file.size;
