@@ -1,16 +1,22 @@
-import { openPcmCapture, type OpenPcmCapture, type PcmCapture } from "./recognition-capture.js";
+import { CaptureTeardownError, openPcmCapture, type OpenPcmCapture, type PcmCapture } from "./recognition-capture.js";
 import { hasSpeechEnergy, MAX_PCM_SAMPLES, MAX_TRANSCRIPT_CHARACTERS, MAX_UTTERANCE_SECONDS } from "./recognition-pcm.js";
 import { WorkerRecognitionRuntime, type RecognitionRuntime, type SpeechPreparation } from "./recognition-runtime.js";
+import { pageSpeechCoordinator, SpeechCoordinator, type SpeechOwner } from "./speech-coordinator.js";
 
-export type { SpeechPreparation } from "./recognition-assets.js";
+export type { SpeechPreparation } from "./speech-assets.js";
 
 export interface LocalRecognitionCallbacks {
   status(message: string): void;
   transcript(text: string): void;
+  /** Residency handoff only: preserve drafts/approvals, but show that recognition needs preparation. */
+  unprepared?(): void;
 }
 export interface LocalRecognitionDependencies {
   createRuntime(): RecognitionRuntime;
   openCapture: OpenPcmCapture;
+  coordinator?: SpeechCoordinator;
+  setTimeout?: typeof setTimeout;
+  clearTimeout?: typeof clearTimeout;
 }
 export type LocalRecognitionState = "unprepared" | "preparing" | "ready" | "starting" | "recording" | "transcribing" | "disposed";
 
@@ -29,20 +35,45 @@ export class LocalRecognizer {
   private pcm?: Float32Array;
   private length = 0;
   private timer?: ReturnType<typeof setTimeout>;
-  constructor(private readonly callbacks: LocalRecognitionCallbacks) {}
+  private opening?: Promise<PcmCapture>;
+  private openingSettled?: Promise<void>;
+  private captureTeardown?: Promise<void>;
+  private settling?: Promise<void>;
+  private canceling = false;
+  private coordinator = pageSpeechCoordinator();
+  private readonly owner: SpeechOwner;
+  constructor(private readonly callbacks: LocalRecognitionCallbacks) {
+    const recognizer = this;
+    this.owner = {
+      kind: "recognition",
+      get phase() {
+        if (recognizer.settling || recognizer.canceling) return "stopping";
+        if (recognizer.currentState === "preparing") return "preparing";
+        return ["starting", "recording", "transcribing"].includes(recognizer.currentState) ? "active" : "idle";
+      },
+      release: () => {
+        this.cancel();
+        try { this.callbacks.unprepared?.(); } catch { /* Observers cannot retain resources. */ }
+        try { this.callbacks.status("Recognition unprepared · speech runtime handed off; prepare explicitly to record"); } catch { /* Observer only. */ }
+        return this.settling ? this.settling.then(() => this.coordinator.safe) : this.coordinator.safe;
+      },
+    };
+  }
 
   /** True only when start() may be called; busy and canceled states are not ready. */
-  get ready(): boolean { return this.currentState === "ready"; }
+  get ready(): boolean { return this.currentState === "ready" && this.coordinator.owns(this.owner); }
   get state(): LocalRecognitionState { return this.currentState; }
 
   /** Explicit test-only dependency injection; production never selects an alternate engine/network path. */
   static createForTest(callbacks: LocalRecognitionCallbacks, dependencies: LocalRecognitionDependencies): LocalRecognizer {
     const recognizer = new LocalRecognizer(callbacks);
     recognizer.dependencies = dependencies;
+    recognizer.coordinator = dependencies.coordinator ?? new SpeechCoordinator();
     return recognizer;
   }
   private check(epoch: number): void {
     if (epoch !== this.epoch || this.currentState === "disposed") throw new DOMException("Local speech canceled", "AbortError");
+    if (!this.coordinator.safe) throw new Error("Audio unsafe; reload this page");
   }
   private status(epoch: number, message: string): void { this.check(epoch); this.callbacks.status(message); this.check(epoch); }
   private async pending<T>(task: Promise<T>, epoch: number): Promise<T> {
@@ -61,12 +92,20 @@ export class LocalRecognizer {
   }
   async prepare(options: SpeechPreparation = { source: "cache" }): Promise<void> {
     if (this.ready) return;
-    if (this.currentState !== "unprepared") throw new Error("Local speech is busy or disposed");
+    if (this.currentState !== "unprepared" || this.settling || this.canceling) throw new Error("Local speech is busy or disposed");
     const epoch = this.epoch;
     this.currentState = "preparing";
     try {
+      const acquisition = this.coordinator.acquire(this.owner);
+      if (acquisition) await this.pending(acquisition, epoch);
+      this.check(epoch);
       this.status(epoch, "Preparing local English speech pack; no microphone is open…");
-      const runtime = this.runtime = this.dependencies.createRuntime();
+      const runtime = this.dependencies.createRuntime();
+      try { this.check(epoch); } catch (error) {
+        try { runtime.terminate(); } catch { this.coordinator.latchUnsafe(); }
+        throw error;
+      }
+      this.runtime = runtime;
       await this.pending(runtime.prepare(message => { if (epoch === this.epoch) this.callbacks.status(message); }, options), epoch);
       this.check(epoch);
       this.currentState = "ready";
@@ -86,7 +125,20 @@ export class LocalRecognizer {
         this.cancel();
         this.callbacks.status("Microphone startup timed out; prepare explicitly to retry");
       }, 30_000);
-      const opening = this.dependencies.openCapture(this.abort.signal, chunk => {
+      let resolveOpening!: (capture: PcmCapture) => void;
+      let rejectOpening!: (error: unknown) => void;
+      const opening = this.opening = new Promise<PcmCapture>((resolve, reject) => { resolveOpening = resolve; rejectOpening = reject; });
+      // Reserve the pending microphone before a dependency can synchronously call back/cancel.
+      const openingSettled = this.openingSettled = opening.then(capture => {
+        if (epoch !== this.epoch) return this.stopOwnedCapture(capture);
+        // Own the result before the pending() continuation: cancellation may run in between.
+        this.capture = capture;
+      }, error => { if (error instanceof CaptureTeardownError) this.coordinator.latchUnsafe(); });
+      const clearOpening = () => {
+        if (this.opening === opening) { this.opening = undefined; this.openingSettled = undefined; }
+      };
+      void openingSettled.then(clearOpening, () => { this.coordinator.latchUnsafe(); clearOpening(); });
+      try { void this.dependencies.openCapture(this.abort.signal, chunk => {
         if (epoch !== this.epoch || !["starting", "recording"].includes(this.currentState) || !this.pcm) return;
         const count = Math.min(chunk.length, MAX_PCM_SAMPLES - this.length);
         this.pcm.set(chunk.subarray(0, count), this.length);
@@ -96,9 +148,7 @@ export class LocalRecognizer {
         if (epoch !== this.epoch) return;
         this.cancel();
         this.callbacks.status(error.message);
-      });
-      // Even non-cooperative test captures and late permission grants must release their tracks.
-      void opening.then(capture => { if (epoch !== this.epoch) capture.stop(); }, () => {});
+      }).then(resolveOpening, rejectOpening); } catch (error) { rejectOpening(error); }
       const capture = await this.pending(opening, epoch);
       this.check(epoch);
       this.capture = capture;
@@ -118,11 +168,13 @@ export class LocalRecognizer {
     if (this.currentState !== "recording") throw new Error("Local speech is not recording");
     const epoch = this.epoch;
     this.currentState = "transcribing";
-    this.stopCapture();
-    const pcm = this.pcm!.slice(0, this.length);
-    this.pcm = undefined;
-    this.length = 0;
     try {
+      const stopped = this.stopCapture();
+      if (stopped) await this.pending(stopped, epoch);
+      this.check(epoch);
+      const pcm = this.pcm!.slice(0, this.length);
+      this.pcm = undefined;
+      this.length = 0;
       if (!hasSpeechEnergy(pcm)) {
         this.currentState = "ready";
         this.status(epoch, "No speech detected; nothing submitted");
@@ -143,18 +195,55 @@ export class LocalRecognizer {
       throw error;
     }
   }
-  private stopCapture(): void { clearTimeout(this.timer); this.timer = undefined; this.capture?.stop(); this.capture = undefined; }
+  private boundedTeardown(task: Promise<void>): Promise<void> {
+    const bounded = new Promise<void>((resolve, reject) => {
+      const timer = (this.dependencies.setTimeout ?? setTimeout)(() => {
+        this.coordinator.latchUnsafe(); reject(new CaptureTeardownError());
+      }, 5_000);
+      void task.then(() => { (this.dependencies.clearTimeout ?? clearTimeout)(timer); resolve(); }, () => {
+        (this.dependencies.clearTimeout ?? clearTimeout)(timer);
+        this.coordinator.latchUnsafe(); reject(new CaptureTeardownError());
+      });
+    });
+    void bounded.catch(() => {});
+    return bounded;
+  }
+  private stopOwnedCapture(capture: PcmCapture): void | Promise<void> {
+    try {
+      const stopped = capture.stop();
+      if (!stopped) return;
+      const teardown = this.captureTeardown = this.boundedTeardown(stopped);
+      const clear = () => { if (this.captureTeardown === teardown) this.captureTeardown = undefined; };
+      void teardown.then(clear, clear);
+      return teardown;
+    } catch (error) { this.coordinator.latchUnsafe(); throw error; }
+  }
+  private stopCapture(): void | Promise<void> {
+    clearTimeout(this.timer); this.timer = undefined;
+    const capture = this.capture; this.capture = undefined;
+    if (capture) return this.stopOwnedCapture(capture);
+  }
   cancel(): void {
+    if (this.canceling) return;
+    this.canceling = true;
     ++this.epoch;
-    this.abort.abort();
+    const abort = this.abort;
     this.abort = new AbortController();
-    this.stopCapture();
+    const runtime = this.runtime; this.runtime = undefined;
+    if (this.currentState !== "disposed") this.currentState = "unprepared";
+    try { abort.abort(); } catch { this.coordinator.latchUnsafe(); }
+    try { this.stopCapture(); } catch { /* Latch set; still terminate independently. */ }
     this.pcm?.fill(0);
     this.pcm = undefined;
     this.length = 0;
-    this.runtime?.terminate();
-    this.runtime = undefined;
-    if (this.currentState !== "disposed") this.currentState = "unprepared";
+    try { runtime?.terminate(); } catch { this.coordinator.latchUnsafe(); }
+    const tasks = [this.openingSettled, this.captureTeardown].filter((task): task is Promise<void> => !!task);
+    if (tasks.length && !this.settling) {
+      // Keep the synchronous cancel API, but retain ownership until tracks AND graph are settled.
+      const finish = () => { this.settling = undefined; this.coordinator.release(this.owner); };
+      this.settling = this.boundedTeardown(Promise.all(tasks).then(() => {})).then(finish, finish);
+    } else if (!this.settling) this.coordinator.release(this.owner);
+    this.canceling = false;
   }
-  dispose(): void { this.cancel(); this.currentState = "disposed"; }
+  dispose(): void { this.currentState = "disposed"; this.cancel(); }
 }

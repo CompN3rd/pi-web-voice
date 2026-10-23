@@ -3,10 +3,19 @@ import { build } from "esbuild";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import assert from "node:assert/strict";
+import { speechManifest, speechCacheName } from "../scripts/speech-assets.mjs";
+const packInfo = {};
+for (const kind of ["recognition", "tts"]) {
+  const assets = await speechManifest(kind);
+  packInfo[kind] = { kind, cacheName: speechCacheName(kind, assets), assets };
+}
 const output = await build({
   entryPoints: ["test/browser-fixture.ts"], bundle: true, write: false, format: "esm", platform: "browser", target: "es2022",
+  define: { __VOICE_PACKS__: JSON.stringify(packInfo), __TTS_BUILD__: JSON.stringify("fixture-build"), __TTS_CACHE__: JSON.stringify(packInfo.tts.cacheName) },
   plugins: [{ name: "fixture-local-recognizer", setup(build) {
     build.onResolve({ filter: /^\.\/audio\.ts$/ }, args => args.importer.replaceAll("\\", "/").endsWith("/src/browser/index.ts")
+      ? { path: resolve("test/browser-fixture.ts") } : undefined);
+    build.onResolve({ filter: /^\.\/tts-runtime\.js$/ }, args => args.importer.replaceAll("\\", "/").endsWith("/src/browser/index.ts")
       ? { path: resolve("test/browser-fixture.ts") } : undefined);
   } }],
 });
@@ -30,6 +39,24 @@ try {
   const reset = async () => { await page.goto("http://localhost:43119/"); await page.getByText("No tracked workers in this workspace.").waitFor(); };
   const prepare = async () => { await button("Prepare local English speech pack").click(); await page.getByText("Local speech ready · audio stays on this device", { exact: true }).waitFor(); };
   const start = async () => { await button("Start recording").click(); await page.getByText("Listening locally · finish within 20 seconds", { exact: true }).waitFor(); };
+  const prepareTts = async () => {
+    if (!await page.evaluate(() => document.querySelector("compn3rd-voice-panel").speech?.ready)) await button("Prepare cached TTS pack").click();
+    await page.waitForFunction(() => document.querySelector("compn3rd-voice-panel").speech?.ready).catch(async error => {
+      console.error(await page.evaluate(() => { const p = document.querySelector("compn3rd-voice-panel"); return { status: p.speech?.status, error: p.error, stats: fixture.stats }; }));
+      throw error;
+    });
+  };
+  const enableTts = async () => page.getByLabel("Enable English Heart playback", { exact: true }).check();
+  const speakStatus = async () => {
+    const count = await page.evaluate(() => fixture.stats.spoken.length);
+    await button("Speak worker status").click();
+    await page.waitForFunction(count => fixture.stats.spoken.length === count + 1, count);
+  };
+  const speakResult = async () => {
+    const count = await page.evaluate(() => fixture.stats.spoken.length);
+    await button("Speak result / question prefix").click();
+    await page.waitForFunction(count => fixture.stats.spoken.length === count + 1, count);
+  };
   const propose = async (title = "Fixture task", instruction = "Inspect tests; do not edit files") => {
     await page.getByLabel("Title", { exact: true }).fill(title);
     await prompt().fill(instruction);
@@ -106,10 +133,51 @@ try {
     assert.equal(await page.evaluate(() => fixture.stats.captures + fixture.stats.instructions), 0); checks++;
   }
 
+  const chooseTtsPack = async () => {
+    const picking = page.waitForEvent("filechooser");
+    await page.getByLabel("Import TTS pack (.pivoice)", { exact: true }).click();
+    return picking;
+  };
+  const ttsFixturePack = { ...fixturePack, buffer: Buffer.from("PIVOTTS1") };
+  await reset();
+  await button("Download pinned TTS pack").click();
+  await page.waitForFunction(() => document.querySelector("compn3rd-voice-panel").speech?.ready);
+  assert.deepEqual(await page.evaluate(() => fixture.stats.ttsAcquisitions), [{ source: "download" }]);
+  assert.equal(await page.evaluate(() => fixture.stats.captures + fixture.stats.audioContexts + fixture.stats.instructions), 0); checks++;
+  await reset();
+  const hiddenTtsPicker = await chooseTtsPack();
+  await page.evaluate(() => fixture.setHidden(true));
+  await hiddenTtsPicker.setFiles(ttsFixturePack);
+  assert.deepEqual(await page.evaluate(() => fixture.stats.ttsAcquisitions), []);
+  await page.evaluate(() => fixture.setHidden(false));
+  await button("Import selected TTS pack").click();
+  await page.waitForFunction(() => document.querySelector("compn3rd-voice-panel").speech?.ready);
+  assert.deepEqual(await page.evaluate(() => fixture.stats.ttsAcquisitions), [{ source: "import", bytes: 8 }]);
+  assert.equal(await page.evaluate(() => fixture.stats.captures + fixture.stats.audioContexts), 0); checks++;
+  // Same-scope ABA and a replacement of either pack kind cannot revive an old input.
+  for (const replacement of ["aba", "tts", "recognition"]) {
+    await reset(); const oldPicker = await chooseTtsPack();
+    if (replacement === "aba") {
+      await page.evaluate(() => fixture.mount("workspace-b"));
+      await page.getByText("Test machine / Test project / workspace-b", { exact: true }).waitFor();
+      await page.evaluate(() => fixture.mount("workspace-a"));
+      await page.getByText("Test machine / Test project / workspace-a", { exact: true }).waitFor();
+    }
+    const freshPicker = replacement === "recognition" ? await choosePack() : await chooseTtsPack();
+    await oldPicker.setFiles(ttsFixturePack);
+    assert.equal(await button("Import selected TTS pack").count(), 0);
+    await freshPicker.setFiles(replacement === "recognition" ? fixturePack : ttsFixturePack);
+    await button(replacement === "recognition" ? "Import selected speech pack" : "Import selected TTS pack").waitFor();
+    assert.equal(await page.evaluate(() => fixture.stats.preparations + fixture.stats.ttsPreparations), 0); checks++;
+  }
+  await reset(); const emptyPicker = await chooseTtsPack(); await emptyPicker.setFiles([]);
+  assert.equal(await button("Import selected TTS pack").count(), 0);
+  assert.equal(await page.evaluate(() => fixture.stats.ttsPreparations), 0); checks++;
+
   // Text-only manual approval and exact payload, full escaped text, navigation/catalog.
   await reset();
   assert.equal(await page.evaluate(() => fixture.stats.captures + fixture.stats.preparations), 0);
-  assert.equal(await page.getByLabel("Local English voice").inputValue(), ""); checks++;
+  assert.equal(await page.getByLabel("Enable English Heart playback", { exact: true }).isChecked(), false); checks++;
   await page.getByText("Text fallback and worker model catalog", { exact: true }).click();
   await button("Load available models").click();
   await page.waitForFunction(() => fixture.stats.requests.some(r => r.operation === "models"));
@@ -130,16 +198,28 @@ try {
   const dimensions = await page.evaluate(() => ({ width: innerWidth, scroll: document.documentElement.scrollWidth }));
   assert.ok(dimensions.scroll <= dimensions.width, JSON.stringify(dimensions)); checks++;
 
-  // Explicit local voice only, bounded playback, and half duplex across capture/inference.
-  assert.deepEqual(await page.getByLabel("Local English voice").locator("option").allTextContents(), ["Text only · select a voice explicitly", "Local English (en-US)"]);
+  // Mount/diagnostics/inspection must not allocate models, enable speech or create audio.
+  await page.getByText("Local TTS diagnostics", { exact: true }).click();
+  await button("Inspect TTS cache").click();
+  const voiceDiagnostics = JSON.parse(await page.getByLabel("Local TTS diagnostics output").innerText());
+  assert.equal(voiceDiagnostics.state, "unprepared");
+  assert.equal(voiceDiagnostics.enabled, false);
+  assert.equal(voiceDiagnostics.safe, true);
+  assert.equal(await page.evaluate(() => fixture.stats.ttsRuntimes + fixture.stats.audioContexts + fixture.stats.spoken.length), 0); checks++;
+
+  // Explicit preparation and enablement are independent; no OS voice APIs exist.
   assert.equal(await button("Speak result / question prefix").isEnabled(), false); checks++;
-  await page.getByLabel("Local English voice").selectOption("Local English");
+  await prepareTts();
+  assert.equal(await button("Speak result / question prefix").isEnabled(), false);
+  assert.equal(await page.evaluate(() => fixture.stats.audioContexts), 0);
+  await enableTts();
   await page.evaluate(() => fixture.setResult("Long result " + "x".repeat(1500)));
   await button("Read text / question").click();
-  await page.getByText("Playback is truncated: reads only the first 1000 characters. Full text is shown above.", { exact: true }).waitFor();
+  await page.getByText("Playback is truncated: reads up to the first 1000 characters. Full text is shown above.", { exact: true }).waitFor();
   await button("Speak result / question prefix").click();
   assert.equal(await page.evaluate(() => fixture.stats.spoken[0].text.length), 1000);
-  assert.equal(await page.evaluate(() => fixture.stats.spoken[0].voiceURI), "Local English"); checks++;
+  assert.equal(await page.evaluate(() => fixture.stats.spoken[0].voiceURI), "af_heart");
+  assert.deepEqual(await page.evaluate(() => fixture.stats.resumedInGesture), [true]); checks++;
   await prepare();
   assert.equal(await page.evaluate(() => fixture.stats.captures), 0); checks++;
   await page.evaluate(() => { fixture.stats.pendingPermission = true; });
@@ -160,9 +240,16 @@ try {
   await page.waitForFunction(() => document.querySelector("compn3rd-voice-panel").shadowRoot.querySelector("textarea").value === "Dictated draft only");
   assert.equal(await page.evaluate(() => fixture.stats.instructions), 1);
   assert.equal(await page.getByRole("article", { name: "Exact proposal" }).count(), 0); checks++;
-  await page.evaluate(() => fixture.removeLocalVoices());
-  await page.getByText("Text only: selected local English voice is no longer available. Select a voice again.", { exact: true }).waitFor();
-  assert.equal(await page.getByLabel("Local English voice").inputValue(), ""); checks++;
+  // Hand back residency explicitly; no transcript/draft is lost and no speech is replayed.
+  const spokenBeforeHandoff = await page.evaluate(() => fixture.stats.spoken.length);
+  assert.equal(await button("Speak worker status").isEnabled(), false);
+  await prepareTts();
+  assert.equal(await prompt().inputValue(), "Dictated draft only");
+  assert.equal(await button("Start recording").isEnabled(), false);
+  assert.equal(await page.evaluate(() => fixture.stats.spoken.length), spokenBeforeHandoff);
+  await enableTts(); await speakStatus();
+  await button("Stop speaking").click();
+  await page.waitForFunction(() => document.querySelector("compn3rd-voice-panel").speech?.state === "unprepared"); checks++;
 
   // Explicit settlement advances the stored revision before a successful reply.
   await settleWorker();
@@ -253,6 +340,7 @@ try {
       if (cancellation === "hide") await page.evaluate(() => fixture.setHidden(false));
       if (cancellation === "unmount") await page.evaluate(() => fixture.mount());
       await unchangedDraft();
+      await page.waitForFunction(() => !document.querySelector("compn3rd-voice-panel").stopping);
       assert.equal(await button("Start recording").isEnabled(), false);
       assert.equal(await button("Prepare local English speech pack").isEnabled(), true);
       assert.equal(await page.evaluate(() => fixture.stats.instructions), 0);
@@ -333,15 +421,15 @@ try {
     await page.waitForFunction(() => fixture.stats.stops === 1);
     assert.equal(await page.evaluate(() => fixture.stats.transcriptions), 0); checks++;
     await reset(); await createWorker();
-    await page.getByLabel("Local English voice").selectOption("Local English");
-    await button("Speak worker status").click();
+    await prepareTts(); await enableTts();
+    await speakStatus();
     if (cancellation === "off") await button("Cancel / voice off").click();
     else if (cancellation === "hide") await page.evaluate(() => fixture.setHidden(true));
     else if (cancellation === "unmount") await page.evaluate(() => fixture.unmount());
     else await page.evaluate(() => fixture.mount("workspace-b"));
     await page.waitForFunction(() => fixture.stats.speechCancels === 1);
     await page.evaluate(() => fixture.lateSpeechEnd());
-    assert.equal(await page.getByText("Local speech finished.", { exact: true }).count(), 0); checks++;
+    assert.equal(await page.getByText("Speech finished", { exact: true }).count(), 0); checks++;
     if (cancellation === "hide") await page.evaluate(() => fixture.setHidden(false));
     if (cancellation === "unmount") await page.evaluate(() => fixture.mount());
     await prepare(); await start();
@@ -353,8 +441,8 @@ try {
     await reset(); await createWorker(); await settleWorker();
     if (cancellation === "revision") await chooseReply();
     await prepare();
-    await page.getByLabel("Local English voice").selectOption("Local English");
-    await button("Speak worker status").click();
+    await prepareTts(); await enableTts();
+    await speakStatus();
     await page.evaluate(() => { fixture.stats.failSpeechCancel = true; });
     if (cancellation === "off") await button("Cancel / voice off").click();
     else if (cancellation === "target") await chooseReply();
@@ -368,7 +456,7 @@ try {
     await page.evaluate(() => fixture.lateSpeechEnd());
     if (cancellation === "hide") await page.evaluate(() => fixture.setHidden(false));
     if (cancellation === "remount") await page.evaluate(() => fixture.mount());
-    await page.getByText(/Speech cancellation failed.*audio may still be playing/).first().waitFor();
+    await page.getByText(/Audio teardown is uncertain/).first().waitFor();
     assert.equal(await button("Prepare local English speech pack").isEnabled(), false);
     assert.equal(await button("Start recording").isEnabled(), false);
     assert.equal(await button("Speak worker status").isEnabled(), false);
@@ -378,39 +466,180 @@ try {
       let error = "";
       try { await panel.prepare(); } catch (failure) { error = failure.message; }
       await panel.toggleRecording();
-      panel.speak("Must stay silent");
+      panel.speak("status");
       return error;
     });
-    assert.match(preparationError, /Speech cancellation failed/);
+    assert.match(preparationError, /Audio teardown is uncertain/);
     await button("Stop speaking").click();
     assert.equal(await page.evaluate(() => fixture.stats.captures), 0);
     assert.equal(await page.evaluate(() => fixture.stats.preparations), 1);
     assert.equal(await page.evaluate(() => fixture.stats.spoken.length), 1);
-    assert.equal(await page.getByText("Local speech canceled.", { exact: true }).count(), 0); checks++;
+    assert.equal(await page.getByText("Speech canceled.", { exact: true }).count(), 0); checks++;
   }
-  // Cancellation can also fail at the capture boundary with an already-ready
-  // recognizer: structured safety, not a status string, must prevent openCapture.
-  await reset(); await createWorker(); await prepare();
-  await page.getByLabel("Local English voice").selectOption("Local English");
-  await button("Speak worker status").click();
+  // Recognition cannot claim residency when stopping TTS leaves audio uncertain.
+  await reset(); await createWorker(); await prepareTts(); await enableTts(); await speakStatus();
   await page.evaluate(() => { fixture.stats.failSpeechCancel = true; });
-  await button("Start recording").click();
-  await page.getByRole("alert").filter({ hasText: "Speech cancellation failed" }).waitFor();
-  const captureError = await page.evaluate(async () => {
-    try { await document.querySelector("compn3rd-voice-panel").toggleRecording(); }
-    catch (failure) { return failure.message; }
-  });
-  assert.match(captureError, /Speech cancellation failed/);
+  await button("Prepare local English speech pack").click();
+  await page.getByText(/Audio teardown is uncertain/).first().waitFor();
   assert.equal(await page.evaluate(() => fixture.stats.captures), 0);
-  assert.equal(await button("Start recording").isEnabled(), false); checks++;
+  assert.equal(await button("Start recording").isEnabled(), false);
+  assert.equal(await button("Prepare cached TTS pack").isEnabled(), false); checks++;
 
   // Reload is the documented recovery boundary, not another panel mount.
   await reset(); await createWorker();
-  await page.getByLabel("Local English voice").selectOption("Local English");
-  await button("Speak worker status").click();
+  await prepareTts(); await enableTts();
+  await speakStatus();
   await prepare(); await start();
   assert.equal(await page.evaluate(() => fixture.stats.captures), 1);
   assert.equal(await page.evaluate(() => fixture.stats.speechCancels), 1); checks++;
+
+  // Same-scope reads must not overwrite a newer result or reopen closed details.
+  await reset(); await createWorker();
+  await page.evaluate(() => { fixture.stats.pendingRead = true; fixture.setResult("Older read"); });
+  await button("Read text / question").click();
+  await page.waitForFunction(() => fixture.stats.requests.filter(r => r.operation === "read").length === 1);
+  await page.evaluate(() => fixture.setResult("Newer read"));
+  await button("Read text / question").click();
+  await page.waitForFunction(() => fixture.stats.requests.filter(r => r.operation === "read").length === 2);
+  await page.evaluate(() => fixture.resolveRead(1));
+  await page.getByText("Newer read", { exact: true }).waitFor();
+  await page.evaluate(async () => { fixture.resolveRead(); await new Promise(requestAnimationFrame); });
+  assert.equal(await page.getByText("Newer read", { exact: true }).count(), 1);
+  assert.equal(await page.getByText("Older read", { exact: true }).count(), 0); checks++;
+
+  await page.evaluate(() => { fixture.stats.pendingRead = true; fixture.setResult("Closed pending read"); });
+  await button("Read text / question").click();
+  await page.waitForFunction(() => fixture.stats.requests.filter(r => r.operation === "read").length === 3);
+  await button("Close detail").click();
+  await page.evaluate(async () => { fixture.resolveRead(); await new Promise(requestAnimationFrame); });
+  assert.equal(await button("Close detail").count(), 0);
+  assert.equal(await page.getByText("Closed pending read", { exact: true }).count(), 0); checks++;
+
+  // A revision change invalidates result playback even when replying to New task.
+  await reset(); await createWorker();
+  await button("Read text / question").click();
+  await button("Close detail").waitFor();
+  await prepareTts(); await enableTts();
+  await prepareTts(); await speakResult();
+  await page.evaluate(() => fixture.bumpRevision());
+  await button("Refresh status").click();
+  await page.waitForFunction(() => fixture.stats.speechCancels === 1);
+  assert.equal(await button("Close detail").count(), 0); checks++;
+
+  await page.evaluate(() => { fixture.stats.pendingRead = true; fixture.setResult("Obsolete revision"); });
+  await button("Read text / question").click();
+  await page.waitForFunction(() => fixture.stats.requests.filter(r => r.operation === "read").length === 2);
+  await page.evaluate(() => fixture.bumpRevision());
+  await button("Refresh status").click();
+  await page.getByLabel("Instruction target").locator("option").last().filter({ hasText: "revision 3" }).waitFor({ state: "attached" });
+  await page.evaluate(async () => { fixture.resolveRead(); await new Promise(requestAnimationFrame); });
+  assert.equal(await page.getByText("Obsolete revision", { exact: true }).count(), 0); checks++;
+
+  // Off clears displayed results as well as pending reads and audio.
+  await reset(); await createWorker();
+  await button("Read text / question").click();
+  await button("Close detail").waitFor();
+  await button("Cancel / voice off").click();
+  assert.equal(await button("Close detail").count(), 0); checks++;
+
+  // Playback started while a replacement read is pending must stop when it arrives.
+  await reset(); await createWorker();
+  await page.evaluate(() => fixture.setResult("Displayed old result"));
+  await button("Read text / question").click();
+  await page.getByText("Displayed old result", { exact: true }).waitFor();
+  await prepareTts(); await enableTts();
+  await page.evaluate(() => { fixture.stats.pendingRead = true; fixture.setResult("Replacement result"); });
+  await button("Read text / question").click();
+  await page.waitForFunction(() => fixture.stats.requests.filter(r => r.operation === "read").length === 2);
+  await prepareTts(); await speakResult();
+  assert.equal(await page.evaluate(() => fixture.stats.spoken.at(-1).text), "Displayed old result");
+  await page.evaluate(() => fixture.resolveRead());
+  await page.getByText("Replacement result", { exact: true }).waitFor();
+  assert.equal(await page.evaluate(() => fixture.stats.speechCancels), 1);
+  await page.evaluate(() => fixture.lateSpeechEnd());
+  assert.equal(await page.getByText("Speech finished", { exact: true }).count(), 0); checks++;
+
+  // The playback prefix retains whole surrogate pairs at the character limit.
+  await reset(); await createWorker();
+  await prepareTts(); await enableTts();
+  for (const [value, expected] of [
+    ["x".repeat(999) + "😀tail", "x".repeat(999)],
+    ["x".repeat(998) + "😀tail", "x".repeat(998) + "😀"],
+    ["x".repeat(1001), "x".repeat(1000)],
+    ["Short 😀", "Short 😀"],
+  ]) {
+    await page.evaluate(value => fixture.setResult(value), value);
+    await button("Read text / question").click();
+    await page.getByText(value, { exact: true }).waitFor();
+    await prepareTts(); await speakResult();
+    assert.equal(await page.evaluate(() => fixture.stats.spoken.at(-1).text), expected); checks++;
+  }
+
+  // A later chunk failure is visibly partial, never labelled complete or replayed.
+  await reset(); await createWorker(); await prepareTts(); await enableTts();
+  await page.evaluate(() => { fixture.stats.ttsChunkCount = 2; fixture.stats.failChunkAt = 1; });
+  await speakStatus();
+  await page.getByText("Partial playback · remaining text was not spoken; prepare explicitly to retry", { exact: true }).waitFor();
+  assert.equal(await page.evaluate(() => fixture.stats.spoken.length), 1);
+  assert.equal(await button("Speak worker status").isEnabled(), false);
+  await page.evaluate(() => fixture.lateSpeechEnd());
+  assert.equal(await page.getByText("Speech finished", { exact: true }).count(), 0); checks++;
+
+  // All asynchronous TTS phases lose source/permission authority on lifecycle changes.
+  for (const boundary of ["prepare", "plan", "chunk", "resume"]) {
+    for (const cancellation of ["off", "hide", "remount", "context"]) {
+      await reset(); await createWorker();
+      if (boundary === "prepare") {
+        await page.evaluate(() => { fixture.stats.pendingTtsPrepare = true; });
+        await button("Prepare cached TTS pack").click();
+        await page.waitForFunction(() => fixture.stats.ttsPreparations === 1);
+      } else {
+        await prepareTts(); await enableTts();
+        await page.evaluate(boundary => { fixture.stats[{ plan: "pendingPlan", chunk: "pendingChunk", resume: "pendingResume" }[boundary]] = true; }, boundary);
+        await button("Speak worker status").click();
+        await page.waitForFunction(boundary => boundary === "plan" ? fixture.stats.ttsPlans.length === 1 : boundary === "chunk" ? fixture.stats.ttsChunks === 1 : fixture.stats.resumedInGesture.length === 1, boundary);
+      }
+      if (cancellation === "off") await button("Cancel / voice off").click();
+      else if (cancellation === "hide") await page.evaluate(() => fixture.setHidden(true));
+      else if (cancellation === "remount") await page.evaluate(() => fixture.unmount());
+      else await page.evaluate(() => fixture.mount("workspace-b"));
+      await page.evaluate(boundary => {
+        fixture[{ prepare: "resolveTtsPrepare", plan: "resolvePlan", chunk: "resolveChunk", resume: "resolveResume" }[boundary]]();
+      }, boundary);
+      if (cancellation === "hide") await page.evaluate(() => fixture.setHidden(false));
+      if (cancellation === "remount") await page.evaluate(() => fixture.mount());
+      await page.waitForFunction(() => !document.querySelector("compn3rd-voice-panel").stopping);
+      assert.equal(await page.evaluate(() => fixture.stats.spoken.length), 0);
+      assert.equal(await button("Speak worker status").isEnabled(), false);
+      assert.equal(await page.getByLabel("Enable English Heart playback", { exact: true }).isChecked(), false);
+      assert.equal(await page.evaluate(() => fixture.stats.instructions), 1); checks++;
+    }
+  }
+
+  // Exact-cache deletion retains exclusion until active audio has safely closed.
+  await reset(); await createWorker(); await prepareTts(); await enableTts(); await speakStatus();
+  await page.evaluate(async names => { for (const name of names) await caches.open(name); fixture.stats.pendingClose = true; }, [packInfo.tts.cacheName, packInfo.recognition.cacheName, "unrelated-cache"]);
+  await button("Clear TTS cache").click();
+  await page.waitForFunction(() => fixture.stats.audioCloses === 1);
+  assert.ok((await page.evaluate(() => caches.keys())).includes(packInfo.tts.cacheName));
+  assert.equal(await button("Prepare local English speech pack").isEnabled(), false);
+  await page.evaluate(() => fixture.resolveClose());
+  await page.waitForFunction(name => caches.has(name).then(present => !present), packInfo.tts.cacheName);
+  assert.deepEqual((await page.evaluate(() => caches.keys())).sort(), [packInfo.recognition.cacheName, "unrelated-cache"].sort());
+  assert.equal(await page.getByLabel("Enable English Heart playback", { exact: true }).isChecked(), false); checks++;
+  await prepare();
+  await button("Clear TTS cache").click();
+  await page.waitForFunction(() => !document.querySelector("compn3rd-voice-panel").cacheAction);
+  assert.equal(await button("Start recording").isEnabled(), true);
+  assert.equal(await page.evaluate(() => fixture.stats.captures), 0); checks++;
+
+  // BFCache transitions require explicit preparation and enablement again.
+  await reset(); await createWorker(); await prepareTts(); await enableTts(); await speakStatus();
+  await page.evaluate(() => { window.dispatchEvent(new PageTransitionEvent("pagehide", { persisted: true })); window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true })); });
+  await page.waitForFunction(() => !document.querySelector("compn3rd-voice-panel").stopping);
+  assert.equal(await button("Speak worker status").isEnabled(), false);
+  assert.equal(await page.getByLabel("Enable English Heart playback", { exact: true }).isChecked(), false);
+  assert.equal(await page.evaluate(() => fixture.stats.spoken.length), 1); checks++;
 
   // Pending full-text read cannot populate a different workspace.
   await reset(); await createWorker();
@@ -422,5 +651,5 @@ try {
   await page.evaluate(() => fixture.resolveRead());
   assert.equal(await page.getByText("<img src=x onerror=alert('bad')> Escaped result", { exact: true }).count(), 0); checks++;
   assert.deepEqual(errors, []); assert.deepEqual(blockedNetwork, []); checks++;
-  console.log(`Browser fixture: ${checks} checks passed (real LocalRecognizer with fake PCM/runtime, fake local synthesis/host, mobile viewport, all networking intercepted; no model downloads or live acceptance).`);
+  console.log(`Browser fixture: ${checks} checks passed (real LocalRecognizer with fake PCM/runtime, real model output controller with fake Web Audio/TTS runtime and host, mobile viewport, all networking intercepted; no model downloads or live acceptance).`);
 } finally { await browser.close(); }

@@ -1,10 +1,12 @@
 # Pi Web Voice
 
-Experimental **phone-browser-local speech interface** for `@jmfederico/pi-web`. Dictate a text task on your phone, review it, send it to an ordinary Pi worker, and optionally hear its result using a local device voice.
+> **ADR 0002 implemented; qualification is incomplete.** English Whisper recognition and Kokoro `af_heart` synthesis execute in browser workers. OS `speechSynthesis` and cloud/system/alternate-voice fallbacks are removed. Acquisition, preparation, playback enablement and Speak are explicit actions. Full-model TTS, Pixel and isolated-host acceptance remain **unrun**; unresolved native-source provenance and combined GPL obligations block release/conveyance. See [ADR 0002](docs/adr/0002-browser-model-tts.md) and [qualification](docs/tts-qualification.md).
 
-**Target device: Google Pixel 8. Real-device acceptance is not yet performed.** Speech recognition runs on the device running the browser, not the Pi Web server. There is no OpenAI Realtime API, separately billed speech service, or cloud speech fallback. Ordinary text workers still use their configured Pi provider/authentication and its usage limits/costs.
+Experimental **phone-browser-local speech interface** for `@jmfederico/pi-web`. Dictate a text task on your phone, review it, send it to an ordinary Pi worker, and optionally request local model playback of its result.
 
-The project is private, experimental, and not driving-validated. It is registered as a Pi Web project but is not installed/activated in the live daemon. See [design](docs/design.md), [security](docs/security.md), and [validation](docs/validation.md).
+**Target device: Google Pixel 8. Real-device acceptance is not yet performed.** Speech recognition and synthesis run on the device running the browser, not the Pi Web server. There is no OpenAI Realtime API, separately billed speech service or remote speech fallback. Ordinary text workers still use their configured Pi provider/authentication and its usage limits/costs.
+
+The project is private, experimental, and not driving-validated. Local installation and server activation are explicit operator steps; repository validation alone does not establish live-host acceptance. See [design](docs/design.md), [security](docs/security.md), and [validation](docs/validation.md).
 
 ## Architecture
 
@@ -13,12 +15,12 @@ Phone mic → local Whisper worker → editable transcript → exact approval
                                                               ↓
                          Pi Web → ordinary Pi text worker / existing auth
                                                               ↓
-Phone speaker ← selected local device voice ← result / saved question
+Phone speaker ← Web Audio PCM ← local Kokoro worker ← result / saved question
 ```
 
 - English-only quantized Whisper tiny.en is the initial recognition model, using a browser WASM worker. No Ollama server is needed.
 - Speech assets are acquired explicitly by the browser: verified cache, pinned public download, or local `.pivoice` file import. No additional host route or inference service is required. Downloads need bandwidth/storage; local computation uses phone battery/memory.
-- Only explicitly selected browser/OS voices marked local are eligible for playback. No local voice means text-only output. The OS locality flag still needs real Pixel offline/network testing.
+- Separately prepare the pinned Kokoro TTS pack, enable English Heart playback, then tap Speak. Only `af_heart` at normal speed is supported. Missing assets, unsupported text or runtime failure leave text usable without an alternate engine/voice. Preparation never speaks.
 - Recognition produces text, not autonomous tool calls. Choose a new task or exact worker follow-up and approve the exact instruction before it leaves the browser for dispatch.
 - Microphone audio is transient: it is not uploaded to Pi Web/an inference provider or persisted by the plugin.
 
@@ -32,6 +34,16 @@ Phone speaker ← selected local device voice ← result / saved question
 - Stop speaking/off does **not** stop coding workers. Use the ordinary session UI for worker control.
 - Core `ask_user`, other extensions' dialogs and ordinary prose questions are not automatically bridged. The companion `voice_request_input` saves a bounded question; an approved follow-up answers it.
 - A completed status means the agent turn settled, not proof that its task succeeded.
+
+## Playback and recovery
+
+Recognition and Playback have separate cached preparation, explicit download, file selection/import and cache inspection/clear controls. Selecting a file alone does nothing; tap the matching Import action after returning from the picker. Recognition is about **65 MB**; TTS is about **116 MB**, including its own runtime copy. These are acquisition sizes, not RAM estimates.
+
+Only one heavyweight speech runtime is resident per document. Preparing one releases the other's idle runtime, preserving cached assets, typed drafts and workers. Recording/transcription blocks TTS preparation. **Stop speaking** cancels TTS preparation/synthesis/playback and releases its weights; explicitly prepare again before speaking. Full voice off, context changes and hiding the page revoke playback enablement and instruction allowances. Nothing resumes automatically.
+
+Playback is an explicitly labelled prefix of at most 1,000 UTF-16 code units; full text remains visible. Conservative unsupported-text rejection is intentional: unsupported scripts/symbols, signed numbers/ranges, malformed numeric forms, numeric spans over 15 digits and words/identifiers over 32 characters reject before audio. Supported text can still be mispronounced. No text is sent to another speech engine.
+
+Clear recognition/TTS cache cancels this page's selected pack use under the audio coordinator, then deletes only that pack's exact compiled cache identity. It does not clear the other pack, old revisions, host data or worker ledgers, and is not cross-tab cancellation. Cache presence is not initialized readiness. If audio teardown cannot be certified within five seconds, a document-level unsafe latch blocks audio until page reload; recreating the panel or clearing cache does not reset it.
 
 ## Worker safety and recovery
 
@@ -54,13 +66,13 @@ npm run test:browser
 npm run test:runtime
 ```
 
-`verify` runs strict typechecking, unit/contract tests and bundles. Browser checks use Playwright Core with installed Chromium/Edge, fake media/local inference/host and intercepted networking. Set `VOICE_BROWSER_EXECUTABLE` if needed. They do not establish Pixel performance, real microphone behavior, actual model accuracy or Android TTS privacy.
+`verify` runs strict typechecking, unit/contract tests and bundles. Browser checks use Playwright Core with installed Chromium/Edge, fake media/local inference/host and intercepted networking. Set `VOICE_BROWSER_EXECUTABLE` if needed. They do not establish Pixel performance, real microphone behavior, actual model accuracy, TTS intelligibility or device privacy.
 
 `test:runtime` exercises the actual pinned ONNX glue/WASM, including cache eviction/corruption and refusal of its XHR fallback. It does not download model weights or establish transcription accuracy.
 
-### Speech pack: no custom host routes
+### Speech packs: no custom host routes
 
-Pi Web's pinned plugin-artifact limit is **16 MiB**, so the approximately **65 MB speech pack** is acquired by the phone, not bundled in the plugin. Choose **cached preparation**, an **explicit pinned public download**, or **import a `.pivoice` file** from the phone's files. No reverse-proxy mapping or additional server route is required.
+Pi Web's pinned plugin-artifact limit is **16 MiB**, so the approximately **65 MB recognition pack** and **116 MB TTS pack** are acquired separately by the phone, not bundled in the plugin. The current build is approximately **4.75 MB uncompressed**, including two Transformers worker bundles, excluding external weights/runtime packs. Choose **cached preparation**, an **explicit pinned public download**, or **import a `.pivoice` file** from the phone's files. No reverse-proxy mapping or additional server route is required.
 
 Downloads contact Hugging Face/CDN and jsDelivr for software files—not an inference API—and omit credentials/referrer. Import offers a no-distribution-network alternative when direct downloads are blocked. Every file is checked against compiled byte lengths and SHA-256 hashes before use. Cached preparation and import never silently download missing files.
 
@@ -72,4 +84,4 @@ Do not activate the prototype in a live instance without a deliberate acceptance
 
 New server plugins require a session-daemon restart arranged outside its hosted sessions. **Restart interrupts active sessions and terminals.** No repository script performs this. Browser reload or Pi `/reload` alone does not activate a new server plugin.
 
-Use a separate data directory, daemon address and web port for isolated acceptance. No OpenAI audio API key or Realtime settings are needed. Text workers retain normal Pi authentication. Keep the package private until live-host, model-asset, Pixel and release-owner gates pass.
+Use a separate data directory, daemon address and web port for isolated acceptance. No OpenAI audio API key or Realtime settings are needed. Text workers retain normal Pi authentication. Keep the package private until live-host, model-asset, Pixel, license and release-owner gates pass. `private: true` is not an exemption from licensing obligations when conveying code/assets to others. Reload the full page when replacing an older OS-synthesis build; do not hot-swap its audio controller.

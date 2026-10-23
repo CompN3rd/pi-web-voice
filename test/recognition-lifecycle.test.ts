@@ -3,6 +3,7 @@ import test from "node:test";
 import { LocalRecognizer } from "../src/browser/audio.ts";
 import type { PcmCapture } from "../src/browser/recognition-capture.ts";
 import { MAX_PCM_SAMPLES } from "../src/browser/recognition-pcm.ts";
+import { SpeechCoordinator } from "../src/browser/speech-coordinator.ts";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -164,4 +165,131 @@ test("LocalRecognizer defaults to cache and forwards explicit preparation modes 
     assert.equal(recognizer.ready, false);
     assert.equal(terminated, 1);
   }
+});
+
+test("LocalRecognizer pending canceled microphone retains page ownership until late tracks stop", async () => {
+  const coordinator = new SpeechCoordinator(), opening = deferred<PcmCapture>();
+  let stopped = 0;
+  const recognizer = LocalRecognizer.createForTest({ status() {}, transcript() {} }, {
+    coordinator,
+    createRuntime: () => ({ prepare: async () => {}, transcribe: async () => "", terminate() {} }),
+    openCapture: () => opening.promise,
+  });
+  await recognizer.prepare(); const starting = recognizer.start();
+  const rejected = assert.rejects(starting, { name: "AbortError" });
+  recognizer.cancel(); await rejected;
+  const tts = { kind: "tts" as const, phase: "idle" as const, release: () => true };
+  assert.throws(() => coordinator.acquire(tts), /busy/);
+  await assert.rejects(recognizer.prepare(), /busy/);
+  opening.resolve({ stop() { stopped++; } });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(stopped, 1);
+  coordinator.acquire(tts); assert.equal(coordinator.owns(tts), true);
+});
+
+test("LocalRecognizer pending microphone teardown deadline latches unsafe, including late throwing stop", async () => {
+  const coordinator = new SpeechCoordinator(), opening = deferred<PcmCapture>();
+  let deadline!: () => void, terminated = 0;
+  const recognizer = LocalRecognizer.createForTest({ status() {}, transcript() {} }, {
+    coordinator,
+    setTimeout: ((callback: () => void, milliseconds: number) => {
+      assert.equal(milliseconds, 5_000); deadline = callback; return {} as ReturnType<typeof setTimeout>;
+    }) as typeof setTimeout,
+    clearTimeout: (() => {}) as typeof clearTimeout,
+    createRuntime: () => ({ prepare: async () => {}, transcribe: async () => "", terminate() { terminated++; } }),
+    openCapture: () => opening.promise,
+  });
+  await recognizer.prepare(); const starting = recognizer.start();
+  const rejected = assert.rejects(starting);
+  recognizer.cancel(); deadline(); await rejected;
+  assert.equal(coordinator.safe, false); assert.equal(terminated, 1);
+  opening.resolve({ stop() { throw new Error("uncertain tracks"); } });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(coordinator.safe, false);
+  await assert.rejects(recognizer.prepare(), /unsafe/);
+});
+
+test("LocalRecognizer stop failure still terminates weights and latches the shared audio gate", async () => {
+  const coordinator = new SpeechCoordinator(); let terminated = 0;
+  const recognizer = LocalRecognizer.createForTest({ status() {}, transcript() {} }, {
+    coordinator,
+    createRuntime: () => ({ prepare: async () => {}, transcribe: async () => "", terminate() { terminated++; } }),
+    openCapture: async () => ({ stop() { throw new Error("stop"); } }),
+  });
+  await recognizer.prepare(); await recognizer.start(); recognizer.cancel();
+  assert.equal(terminated, 1); assert.equal(coordinator.safe, false);
+  await assert.rejects(recognizer.start(), /Prepare/);
+});
+
+test("LocalRecognizer owns resolved microphone before an intervening cancellation microtask", async () => {
+  const coordinator = new SpeechCoordinator(), opening = deferred<PcmCapture>(); let stops = 0;
+  const recognizer = LocalRecognizer.createForTest({ status() {}, transcript() {} }, {
+    coordinator,
+    createRuntime: () => ({ prepare: async () => {}, transcribe: async () => "", terminate() {} }),
+    openCapture: () => opening.promise,
+  });
+  await recognizer.prepare(); const starting = recognizer.start();
+  const rejected = assert.rejects(starting, { name: "AbortError" });
+  void opening.promise.then(() => queueMicrotask(() => recognizer.cancel()));
+  opening.resolve({ stop() { stops++; } });
+  await rejected; await new Promise(resolve => setImmediate(resolve));
+  assert.equal(stops, 1); assert.equal(recognizer.ready, false);
+  assert.equal(coordinator.safe, true);
+});
+
+test("LocalRecognizer awaits capture close before inference and retains exclusion through cancel", async () => {
+  const coordinator = new SpeechCoordinator(), closing = deferred<void>();
+  let samples!: (pcm: Float32Array) => void, inferences = 0, stops = 0;
+  const recognizer = LocalRecognizer.createForTest({ status() {}, transcript() {} }, {
+    coordinator,
+    createRuntime: () => ({ prepare: async () => {}, transcribe: async () => { inferences++; return "text"; }, terminate() {} }),
+    openCapture: async (_signal, receive) => { samples = receive; return { stop() { stops++; return closing.promise; } }; },
+  });
+  await recognizer.prepare(); await recognizer.start(); samples(new Float32Array(8000).fill(0.1));
+  const finish = recognizer.finish();
+  assert.equal(stops, 1); assert.equal(inferences, 0);
+  assert.throws(() => coordinator.acquire({ kind: "tts", phase: "idle", release: () => true }), /busy/);
+  const rejected = assert.rejects(finish, { name: "AbortError" });
+  recognizer.cancel(); await rejected;
+  assert.throws(() => coordinator.acquire({ kind: "tts", phase: "idle", release: () => true }), /busy/);
+  closing.resolve(); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(inferences, 0); assert.equal(coordinator.safe, true);
+  coordinator.acquire({ kind: "tts", phase: "idle", release: () => true });
+});
+
+test("LocalRecognizer rejects unsafe asynchronous close and never transcribes", async () => {
+  const coordinator = new SpeechCoordinator(), closing = deferred<void>();
+  let samples!: (pcm: Float32Array) => void;
+  const recognizer = LocalRecognizer.createForTest({ status() {}, transcript() {} }, {
+    coordinator,
+    createRuntime: () => ({ prepare: async () => {}, transcribe: async () => { assert.fail("unsafe inference"); }, terminate() {} }),
+    openCapture: async (_signal, receive) => { samples = receive; return { stop: () => closing.promise }; },
+  });
+  await recognizer.prepare(); await recognizer.start(); samples(new Float32Array(8000).fill(0.1));
+  const finish = recognizer.finish();
+  const rejected = assert.rejects(finish, { name: "CaptureTeardownError" });
+  closing.reject(new Error("uncertain close")); await rejected;
+  assert.equal(coordinator.safe, false); assert.equal(recognizer.ready, false);
+});
+
+test("LocalRecognizer pending capture close has a main-thread 5s deadline; late settlement cannot clear unsafe", async () => {
+  const coordinator = new SpeechCoordinator(), closing = deferred<void>();
+  const timers = new Map<ReturnType<typeof setTimeout>, () => void>();
+  const recognizer = LocalRecognizer.createForTest({ status() {}, transcript() {} }, {
+    coordinator,
+    setTimeout: ((callback: () => void, milliseconds: number) => {
+      assert.equal(milliseconds, 5_000); const key = {} as ReturnType<typeof setTimeout>; timers.set(key, callback); return key;
+    }) as typeof setTimeout,
+    clearTimeout: ((key: ReturnType<typeof setTimeout>) => { timers.delete(key); }) as typeof clearTimeout,
+    createRuntime: () => ({ prepare: async () => {}, transcribe: async () => "", terminate() {} }),
+    openCapture: async () => ({ stop: () => closing.promise }),
+  });
+  await recognizer.prepare(); await recognizer.start(); recognizer.cancel();
+  assert.equal(coordinator.stopping, true);
+  for (const callback of timers.values()) callback();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(coordinator.safe, false);
+  closing.resolve(); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(coordinator.safe, false); assert.equal(timers.size, 0);
+  await assert.rejects(recognizer.prepare(), /unsafe/);
 });

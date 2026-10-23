@@ -4,13 +4,13 @@ The plugin requires **no additional host route, reverse-proxy mapping or inferen
 
 ## What is installed
 
-The normal Pi package contains the panel, recognition worker/worklet JavaScript, text backend/companion, notices and pinned speech-asset metadata. Keep it below Pi Web's pinned **16 MiB total uncompressed artifact** limit. Model weights and the large WASM file are acquired by the browser separately and do not belong in the installed package directory.
+The normal Pi package contains the panel, recognition worker/worklet and TTS bootstrap/worker/controller JavaScript, text backend/companion, notices and pinned speech-asset metadata. Keep it below Pi Web's pinned **16 MiB total uncompressed artifact** limit. The current build is approximately 4.75 MB uncompressed, including two Transformers worker bundles. Model weights, voice/phonemizer assets and large WASM files are acquired by the browser separately and do not belong in the installed package directory.
 
 Use the normal Pi package installation flow after explicit authorization. Enable the plugin and its companion as described in README. New server-plugin activation still requires an authorized daemon restart outside hosted sessions; this interrupts active sessions. Nothing in the build/acquisition tools performs live activation or restarts.
 
-## First use on the phone
+## First recognition use on the phone
 
-Open Pi Web through its existing secure HTTPS deployment, open Local voice and choose an acquisition method:
+After authorized isolated-host setup and license review, open Pi Web through its existing secure HTTPS deployment, open Local voice and choose a recognition acquisition method. TTS has separate controls described below:
 
 - **Cached preparation:** verify the existing browser speech cache and initialize recognition. No model download is permitted. Use this after a previous successful import/download.
 - **Explicit download:** consent to roughly 65 MB of pinned public model/runtime downloads from Hugging Face and its CDN, and jsDelivr. No API key or separately billed inference service is involved. Requests omit credentials/referrer; the distribution hosts still see normal request metadata. Every file must pass compiled size/hash checks.
@@ -45,6 +45,27 @@ The export is a fixed, uncompressed binary format, not an archive. The browser v
 
 Keep large source/export files **outside all installed plugin roots**, including development checkouts installed directly. The pinned host scans more than npm's allowlist when loading a checkout. Prefer the checked tarball for installation.
 
+## TTS pack preparation and playback
+
+ADR 0002's Kokoro runtime and Playback UI are implemented. Use **Prepare cached TTS pack**, **Download pinned TTS pack**, or **Choose TTS pack** followed by **Import selected TTS pack**. Do not pass it to the recognition importer. Preparation never opens the microphone or speaks; separately enable English Heart playback and tap Speak. Only pinned `af_heart` at normal speed is available, with no OS/cloud/alternate-voice fallback. Unsupported text fails conservatively; full-model TTS, Pixel and host acceptance remain unrun. See [qualification and unresolved license gates](tts-qualification.md).
+
+Preparing TTS releases idle recognition; preparing recognition releases TTS. Only one heavyweight runtime is resident per document. Stop speaking releases TTS resources and requires explicit reprepare. Full off/context/hide revokes playback enablement and instruction allowances. Independent cache inspection/clear controls distinguish cached bytes from initialized readiness. Clear cancels only the selected pack's page-owned use and deletes its exact compiled cache identity, not other packs/revisions, host data or worker ledgers. Other tabs are not canceled. Uncertain capture/playback teardown retains ownership up to five seconds and then latches audio unsafe until reload; cache clear/remount is not recovery.
+
+Existing commands still default to `--pack recognition`, preserving Whisper's `PIVOICE1` format and ordered assets. Explicit `--pack tts` selects the independently pinned `PIVOTTS1` format: 115,849,893 payload bytes plus an eight-byte header (about 116 MB), including its own ORT copy. Acquisition size is not a RAM estimate.
+
+```sh
+# Optional operator opt-in; never run automatically by build or tests.
+npm run speech:provision -- --pack tts --output /external/pi-voice-tts --download
+npm run speech:export -- --pack tts --input /external/pi-voice-tts --output /external/english-tts.pivoice
+
+# Alternatively reuse verified complete source assets without downloading.
+npm run speech:provision -- --pack tts --output /external/pi-voice-tts --from-pack /external/verified-tts
+```
+
+`--from-pack` accepts a directory with the compiled relative layout (model, voice, phonemizer and runtime), not a caller-provided manifest. Missing/corrupt files fail without `--download`; existing verified entries remain reusable. `--from-models` remains supported for the older model-directory layout. Do not combine both source options.
+
+Keep the source directory's model card, provenance, published phonemizer license and `TTS-QUALIFICATION.md` alongside any privately exported file. The embedded eSpeak-derived runtime's native corresponding-source provenance and combined GPL obligations are unresolved and block release/conveyance; `private: true` is not an exemption when code/assets are sent to others. This tooling is not permission to distribute/release the candidate. No weights are bundled into the plugin.
+
 ## Development verification
 
 ```sh
@@ -59,6 +80,20 @@ npm pack --ignore-scripts
 
 The optional `npm run test:model -- --output /external/pi-voice-pack` uses an existing local verified asset directory, constructs a matching import file, and exercises actual browser inference. It downloads no weights and serves no model route. Synthetic PCM output proves initialization/inference wiring, not speech accuracy or Pixel performance.
 
+The additional TTS checks are separately invoked (no automatic download):
+
+```sh
+# Set to an explicit external published phonemizer@1.2.1 file.
+VOICE_TTS_PHONEMIZER_FILE=/external/phonemizer.js npm run test:tts-runtime
+VOICE_TTS_PHONEMIZER_FILE=/external/phonemizer.js npm run test:tts-phonemizer
+# Set to an explicit external, verified PIVOTTS1 import file.
+VOICE_TTS_PACK_FILE=/external/english-tts.pivoice npm run test:tts-model
+```
+
+Set the corresponding environment variables using your shell's syntax on Windows. The loader check exercises real phonemizer/ORT without model weights; the model check requires operator-provided weights and remains unrun. Neither establishes Pixel performance or intelligibility. Do not fetch weights to make default tests pass.
+
+Reload the full page when upgrading from OS-synthesis builds; do not hot-swap controllers while legacy audio may exist.
+
 ## Remaining real-device gates
 
-Actual Pixel 8 timing, accuracy, memory/heat/battery, file-picker behavior, cache quota/eviction, authenticated host CSP, microphone/headset behavior and Android local-voice airplane-mode/network behavior require acceptance on the device. No locked-screen, background audio or driving guarantee is made. Direct-download CORS/source availability must be checked separately from offline import/inference tests.
+Actual Pixel 8 timing, accuracy, memory/heat/battery, file-picker behavior, cache quota/eviction, authenticated host CSP, microphone/headset behavior and actual Kokoro intelligibility, offline/cache-only behavior and device-level network privacy require acceptance on the device. No locked-screen, background audio or driving guarantee is made. Direct-download CORS/source availability must be checked separately from offline import/inference tests.

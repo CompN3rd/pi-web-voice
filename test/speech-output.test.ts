@@ -1,344 +1,447 @@
-import test from "node:test";
 import assert from "node:assert/strict";
-import { LocalSpeechOutput, type LocalSpeechOutputDependencies } from "../src/browser/speech-output.ts";
+import test from "node:test";
+import { ModelSpeechOutput, type ModelSpeechStatus } from "../src/browser/speech-output.ts";
+import { SpeechCoordinator } from "../src/browser/speech-coordinator.ts";
+import { LocalRecognizer } from "../src/browser/audio.ts";
+import { TTS_SAMPLE_RATE, TTS_MAX_CHUNK_SAMPLES, TTS_MAX_TOTAL_SAMPLES, type TtsRuntime } from "../src/browser/tts-contract.ts";
 
-function voice(voiceURI = "local-en", localService = true, lang = "en-US"): SpeechSynthesisVoice {
-  return { voiceURI, name: voiceURI, lang, localService, default: false };
+function deferred<T>() {
+  let resolve!: (value: T) => void, reject!: (error: Error) => void;
+  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
 }
-
-function fixture(initial: SpeechSynthesisVoice[] = [voice()]) {
-  let inventory = initial;
-  let cancelCount = 0;
-  let throwOnSpeak = false;
-  let throwOnCancel = false;
-  let throwOnInventory = false;
-  const statuses: string[] = [];
-  const utterances: SpeechSynthesisUtterance[] = [];
-  const listeners = new Set<EventListenerOrEventListenerObject>();
-  const timers = new Map<ReturnType<typeof setTimeout>, { callback: () => void; milliseconds: number }>();
-  const dependencies: LocalSpeechOutputDependencies = {
-    synthesis: {
-      getVoices: () => { if (throwOnInventory) throw new Error("inventory failed"); return inventory; },
-      speak: utterance => {
-        assert.ok(utterance.voice && utterance.voice.localService === true);
-        assert.equal(utterance.lang, utterance.voice.lang);
-        utterances.push(utterance);
-        if (throwOnSpeak) throw new Error("playback failed");
-      },
-      cancel: () => { cancelCount++; if (throwOnCancel) throw new Error("cancel failed"); },
-      addEventListener: (_type: string, listener: EventListenerOrEventListenerObject | null) => { if (listener) listeners.add(listener); },
-      removeEventListener: (_type: string, listener: EventListenerOrEventListenerObject | null) => { if (listener) listeners.delete(listener); },
-    },
-    createUtterance: text => ({ text, voice: null, lang: "", onend: null, onerror: null }) as SpeechSynthesisUtterance,
-    setTimeout: (callback, milliseconds) => {
-      const handle = {} as ReturnType<typeof setTimeout>;
-      timers.set(handle, { callback, milliseconds });
-      return handle;
-    },
-    clearTimeout: timer => { timers.delete(timer); },
+const flush = () => new Promise<void>(resolve => setImmediate(resolve));
+class Clock {
+  timers = new Map<ReturnType<typeof setTimeout>, { callback: () => void; ms: number }>();
+  setTimeout = (callback: () => void, ms: number) => {
+    const key = {} as ReturnType<typeof setTimeout>;
+    this.timers.set(key, { callback, ms }); return key;
   };
-  const output = new LocalSpeechOutput(message => statuses.push(message), dependencies);
-  return {
-    output, dependencies, statuses, utterances, listeners, timers,
-    get cancelCount() { return cancelCount; },
-    setInventory(value: SpeechSynthesisVoice[]) { inventory = value; },
-    failSpeak() { throwOnSpeak = true; },
-    failCancel() { throwOnCancel = true; },
-    failInventory() { throwOnInventory = true; },
-    voicesChanged() {
-      for (const listener of listeners) {
-        if (typeof listener === "function") listener(new Event("voiceschanged"));
-        else listener.handleEvent(new Event("voiceschanged"));
-      }
-    },
-  };
-}
-
-function callbacks(utterance: SpeechSynthesisUtterance) {
-  const end = utterance.onend;
-  const error = utterance.onerror;
-  return {
-    end: () => end?.call(utterance, {} as SpeechSynthesisEvent),
-    error: () => error?.call(utterance, {} as SpeechSynthesisErrorEvent),
-  };
-}
-
-test("LocalSpeechOutput stays text-only for no voices, remote-only, non-English and empty URI voices", () => {
-  for (const inventory of [[], [voice("remote", false)], [voice("fr", true, "fr-FR")], [voice("")]]) {
-    const f = fixture(inventory);
-    assert.deepEqual(f.output.voices(), []);
-    f.output.select(inventory[0]?.voiceURI ?? "missing");
-    f.output.speak("hello");
-    assert.equal(f.utterances.length, 0);
-    assert.match(f.statuses.at(-1)!, /Text only/);
-    f.output.dispose();
+  clearTimeout = (key: ReturnType<typeof setTimeout>) => { this.timers.delete(key); };
+  fire(ms: number) {
+    const entries = [...this.timers.entries()].filter(([, timer]) => timer.ms === ms);
+    assert.ok(entries.length, `expected ${ms}ms deadline`);
+    for (const [key, timer] of entries) { this.timers.delete(key); timer.callback(); }
   }
-});
-
-test("LocalSpeechOutput supports missing browser speech APIs without a fallback", () => {
-  const statuses: string[] = [];
-  const output = new LocalSpeechOutput(message => statuses.push(message), {
-    setTimeout, clearTimeout,
+}
+class FakeSource {
+  buffer: unknown = null;
+  onended: (() => void) | null = null;
+  started = 0; stopped = 0; disconnected = 0;
+  throwStop = false; throwDisconnect = false;
+  connect() {}
+  start() { this.started++; }
+  stop() { this.stopped++; if (this.throwStop) throw new Error("stop"); }
+  disconnect() { this.disconnected++; if (this.throwDisconnect) throw new Error("disconnect"); }
+  end() { this.onended?.(); }
+}
+class FakeAudio {
+  state = "suspended";
+  destination = {};
+  onstatechange: (() => void) | null = null;
+  sources: FakeSource[] = [];
+  buffers: Array<{ channels: number; length: number; rate: number }> = [];
+  resumes = 0; closes = 0; gainDisconnects = 0;
+  throwGainDisconnect = false;
+  resumeTask?: Promise<void>; closeTask?: Promise<void>;
+  gain = { gain: { value: 1 }, connect() {}, disconnect: () => { this.gainDisconnects++; if (this.throwGainDisconnect) throw new Error("gain disconnect"); } };
+  createGain() { return this.gain; }
+  createBuffer(channels: number, length: number, rate: number) {
+    this.buffers.push({ channels, length, rate }); return { copyToChannel() {} };
+  }
+  createBufferSource() { const source = new FakeSource(); this.sources.push(source); return source; }
+  resume() {
+    this.resumes++;
+    if (this.resumeTask) return this.resumeTask.then(() => { if (this.state !== "closed") this.state = "running"; });
+    this.state = "running"; return Promise.resolve();
+  }
+  close() {
+    this.closes++;
+    if (this.closeTask) return this.closeTask.then(() => { this.state = "closed"; });
+    this.state = "closed"; return Promise.resolve();
+  }
+}
+function fixture(coordinator = new SpeechCoordinator()) {
+  const clock = new Clock(), audio = new FakeAudio();
+  const statuses: ModelSpeechStatus[] = [], requested: number[] = [], texts: string[] = [];
+  let creates = 0, contexts = 0, terminated = 0;
+  const runtime: TtsRuntime = {
+    prepare: async () => {}, plan: async text => { texts.push(text); return 1; },
+    chunk: async index => { requested.push(index); return new Float32Array(240).fill(0.25); },
+    terminate: () => { terminated++; },
+  };
+  let observer: ((status: ModelSpeechStatus) => void) | undefined;
+  const output = new ModelSpeechOutput(status => { statuses.push(status); observer?.(status); }, () => { creates++; return runtime; }, {
+    coordinator, createAudioContext: () => { contexts++; return audio as unknown as AudioContext; },
+    setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout,
   });
-  output.select("local-en");
-  output.speak("hello");
-  assert.deepEqual(output.voices(), []);
-  assert.match(statuses.at(-1)!, /Text only/);
-  output.dispose();
-});
+  return { output, runtime, clock, audio, statuses, requested, texts, coordinator,
+    observe(callback: (status: ModelSpeechStatus) => void) { observer = callback; },
+    counts: () => ({ creates, contexts, terminated }),
+    async ready() { await output.prepare(); output.setEnabled(true); },
+  };
+}
 
-test("LocalSpeechOutput enumerates only local English metadata and requires explicit selection", () => {
-  const english = { ...voice(), default: true };
-  const f = fixture([english, voice("remote", false), voice("french", true, "fr"), voice("british", true, "en-GB")]);
-  assert.deepEqual(f.output.voices(), [
-    { voiceURI: "local-en", name: "local-en", lang: "en-US" },
-    { voiceURI: "british", name: "british", lang: "en-GB" },
-  ]);
-  f.output.speak("No implicit default");
-  assert.equal(f.utterances.length, 0);
-  f.output.select("local-en");
-  f.output.speak("hello");
-  assert.equal(f.utterances[0].voice, english);
-  assert.equal(f.utterances[0].lang, "en-US");
-  assert.equal(f.utterances[0].text, "hello");
-  callbacks(f.utterances[0]).end();
-  assert.equal(f.timers.size, 0);
-  assert.equal(f.cancelCount, 0);
-  assert.match(f.statuses.at(-1)!, /finished/);
-  f.output.dispose();
-});
-
-test("LocalSpeechOutput supports delayed voiceschanged without auto-selecting or replaying text", () => {
-  const f = fixture([]);
-  f.output.speak("Do not replay");
-  f.setInventory([voice()]);
-  f.voicesChanged();
-  assert.equal(f.output.voices().length, 1);
-  assert.match(f.statuses.at(-1)!, /select a local English voice/);
-  f.output.speak("Still not selected");
-  assert.equal(f.utterances.length, 0);
-  f.output.select("local-en");
-  f.output.speak("Explicit new request");
-  assert.equal(f.utterances.length, 1);
-  f.output.dispose();
-});
-
-test("LocalSpeechOutput re-resolves the current voice object for every utterance", () => {
-  const f = fixture();
-  f.output.select("local-en");
-  const replacement = voice("local-en", true, "en-GB");
-  f.setInventory([replacement]);
-  f.output.speak("hello");
-  assert.equal(f.utterances[0].voice, replacement);
-  assert.equal(f.utterances[0].lang, "en-GB");
-  f.output.dispose();
-});
-
-test("LocalSpeechOutput rejects disappeared, changed-to-remote, changed-language and ambiguous selected voices", () => {
-  for (const inventory of [[], [voice("local-en", false)], [voice("local-en", true, "fr")], [voice(), voice()]]) {
+test("ModelSpeechOutput is inert, separate preparation/enablement, never consults OS speech", async () => {
+  Object.defineProperty(globalThis, "speechSynthesis", { configurable: true, get() { assert.fail("OS speech accessed"); } });
+  Object.defineProperty(globalThis, "SpeechSynthesisUtterance", { configurable: true, get() { assert.fail("OS speech accessed"); } });
+  try {
     const f = fixture();
-    f.output.select("local-en");
-    f.setInventory(inventory); // No voiceschanged event: speak must still recheck.
-    f.output.speak("never use a default");
-    assert.equal(f.utterances.length, 0);
-    f.setInventory([voice()]);
-    f.output.speak("selection was revoked");
-    assert.equal(f.utterances.length, 0);
-    f.output.dispose();
+    assert.deepEqual(f.counts(), { creates: 0, contexts: 0, terminated: 0 });
+    assert.deepEqual(f.statuses, []);
+    await assert.rejects(f.output.speak("hello"), /Enable and prepare/);
+    await f.output.prepare();
+    assert.equal(f.output.ready, true); assert.equal(f.output.enabled, false);
+    await assert.rejects(f.output.speak("hello"));
+    assert.equal(f.counts().contexts, 0);
+    f.output.setEnabled(true);
+    const speaking = f.output.speak("hello");
+    assert.equal(f.audio.resumes, 1, "resume occurs in the direct gesture call, not a continuation");
+    await flush(); f.audio.sources[0].end(); await speaking;
+    assert.equal(f.output.ready, true); assert.equal(f.counts().terminated, 0);
+    assert.deepEqual(f.audio.buffers, [{ channels: 1, length: 240, rate: TTS_SAMPLE_RATE }]);
+    assert.equal(f.audio.gain.gain.value, 0);
+    assert.equal(f.audio.sources[0].buffer, null);
+    assert.equal(await f.output.dispose(), true);
+  } finally { delete (globalThis as Record<string, unknown>).speechSynthesis; delete (globalThis as Record<string, unknown>).SpeechSynthesisUtterance; }
+});
+
+test("ModelSpeechOutput validates exact prefix and rejects repeated clicks without replacement/replay", async () => {
+  const f = fixture(); await f.ready();
+  for (const text of ["", " \n", "a".repeat(1001)]) await assert.rejects(f.output.speak(text), /prefix/);
+  assert.equal(f.audio.resumes, 0);
+  const job = f.output.speak("a".repeat(1000)); await flush();
+  await assert.rejects(f.output.speak("second"), /busy/);
+  assert.equal(f.audio.sources.length, 1); assert.equal(f.audio.gain.gain.value, 0.8);
+  const rejected = assert.rejects(job, { name: "AbortError" });
+  await f.output.stop(); await rejected;
+  assert.equal(f.output.enabled, true); assert.equal(f.output.ready, false);
+  await assert.rejects(f.output.speak("no auto reload"));
+  assert.equal(f.counts().creates, 1); assert.equal(f.texts.length, 1);
+  assert.equal(f.clock.timers.size, 0);
+});
+
+test("ModelSpeechOutput stop cancels pending prepare, suppresses late progress and releases weights", async () => {
+  const f = fixture(), loading = deferred<void>();
+  let progress!: Parameters<TtsRuntime["prepare"]>[0];
+  let options: unknown;
+  f.runtime.prepare = (status, value) => { progress = status; options = value; return loading.promise; };
+  const job = f.output.prepare({ source: "download" });
+  assert.deepEqual(options, { source: "download" });
+  const rejected = assert.rejects(job, { name: "AbortError" });
+  await f.output.stop(); await rejected;
+  const count = f.statuses.length;
+  progress({ phase: "initializing" }); loading.resolve(); await flush();
+  assert.equal(f.statuses.length, count); assert.equal(f.output.ready, false);
+  assert.equal(f.counts().terminated, 1); assert.equal(f.clock.timers.size, 0);
+});
+
+test("ModelSpeechOutput reentrant status cancellation cannot resurrect prepare or playback", async () => {
+  for (const phase of ["preparing", "synthesizing", "playing"] as const) {
+    const f = fixture();
+    if (phase !== "preparing") await f.ready();
+    f.observe(status => { if (status.code === phase) void f.output.dispose(); });
+    const job = phase === "preparing" ? f.output.prepare() : f.output.speak("hello");
+    await assert.rejects(job, { name: "AbortError" }); await flush();
+    assert.equal(f.output.state, "disposed"); assert.equal(f.output.enabled, false);
+    assert.equal(f.output.ready, false); assert.equal(f.clock.timers.size, 0);
+    if (phase === "preparing") assert.equal(f.counts().creates, 0);
+    for (const source of f.audio.sources) { assert.equal(source.stopped, 1); assert.equal(source.buffer, null); }
   }
 });
 
-test("LocalSpeechOutput cancels active speech when voiceschanged removes the selected voice", () => {
-  const f = fixture();
-  f.output.select("local-en");
-  f.output.speak("hello");
-  const late = callbacks(f.utterances[0]);
-  f.setInventory([]);
-  f.voicesChanged();
-  assert.equal(f.cancelCount, 1);
-  assert.equal(f.timers.size, 0);
-  assert.match(f.statuses.at(-1)!, /no longer available/);
-  const count = f.statuses.length;
-  late.end(); late.error();
-  assert.equal(f.statuses.length, count);
-  f.output.dispose();
+test("ModelSpeechOutput stop waits for pending resume and close; late callbacks cannot start sources", async () => {
+  const f = fixture(), resume = deferred<void>(), close = deferred<void>();
+  f.audio.resumeTask = resume.promise; f.audio.closeTask = close.promise;
+  await f.ready(); const job = f.output.speak("hello");
+  const rejected = assert.rejects(job, { name: "AbortError" });
+  let settled = false;
+  const stopping = f.output.stop().then(safe => { settled = true; return safe; });
+  assert.equal(f.output.state, "stopping"); await flush(); assert.equal(settled, false);
+  await assert.rejects(f.output.prepare(), /busy/);
+  close.resolve(); await flush(); assert.equal(settled, false);
+  resume.resolve(); assert.equal(await stopping, true); await rejected;
+  assert.equal(f.audio.sources.length, 0); assert.equal(f.output.state, "unprepared");
+  assert.equal(f.clock.timers.size, 0);
 });
 
-test("LocalSpeechOutput replaces rather than queues, fences canceled callbacks and clears timers", () => {
-  const f = fixture();
-  f.output.select("local-en");
-  f.output.speak("first");
-  const late = callbacks(f.utterances[0]);
-  const lateTimeout = [...f.timers.values()][0].callback;
-  f.output.speak("second");
-  assert.equal(f.cancelCount, 1);
-  assert.equal(f.timers.size, 1);
-  assert.equal(f.utterances[0].onend, null);
-  const count = f.statuses.length;
-  late.end(); late.error(); lateTimeout();
-  assert.equal(f.statuses.length, count);
-  assert.equal(f.timers.size, 1);
-  const secondLate = callbacks(f.utterances[1]);
-  f.output.cancel();
-  assert.equal(f.cancelCount, 2);
-  assert.equal(f.timers.size, 0);
-  const canceledCount = f.statuses.length;
-  secondLate.end(); secondLate.error();
-  assert.equal(f.statuses.length, canceledCount);
-  assert.equal(f.utterances.length, 2);
-  f.output.dispose();
+test("ModelSpeechOutput rejected resume is recoverable only after explicit preparation/fresh gesture", async () => {
+  const f = fixture(); f.audio.resumeTask = Promise.reject(new Error("autoplay"));
+  // Attach before awaiting preparation to keep this intentionally rejected fake observed.
+  void f.audio.resumeTask.catch(() => {});
+  await f.ready(); await assert.rejects(f.output.speak("hello"), /autoplay/);
+  assert.equal(f.output.state, "failed"); assert.equal(f.output.cancellationSafe, true);
+  assert.equal(f.audio.sources.length, 0); assert.equal(f.counts().terminated, 1);
+  await assert.rejects(f.output.speak("never retry")); assert.equal(f.audio.resumes, 1);
 });
 
-test("LocalSpeechOutput rejects empty/oversized text and bounds accepted utterances to 1000 characters", () => {
-  const f = fixture();
-  f.output.select("local-en");
-  for (const text of ["", " \n\t", "x".repeat(1001)]) f.output.speak(text);
-  assert.equal(f.utterances.length, 0);
-  f.output.speak("x".repeat(1000));
-  assert.equal(f.utterances.length, 1);
-  f.output.speak("x".repeat(1001));
-  assert.equal(f.utterances.length, 1);
-  assert.equal(f.cancelCount, 1);
-  assert.equal(f.timers.size, 0);
-  f.output.dispose();
+test("ModelSpeechOutput never-settling resume or close latches document unsafe after bounded teardown", async () => {
+  for (const pending of ["resume", "close"] as const) {
+    const coordinator = new SpeechCoordinator(), f = fixture(coordinator), task = deferred<void>();
+    if (pending === "resume") f.audio.resumeTask = task.promise; else f.audio.closeTask = task.promise;
+    await f.ready(); const job = f.output.speak("hello"); await flush();
+    const rejected = assert.rejects(job);
+    const stopping = f.output.dispose();
+    f.clock.fire(5_000);
+    assert.equal(await stopping, false); await rejected;
+    const remount = fixture(coordinator);
+    assert.equal(remount.output.cancellationSafe, false);
+    await assert.rejects(remount.output.prepare(), /unsafe/);
+    remount.output.setEnabled(true); assert.equal(remount.output.enabled, false);
+    task.resolve(); await flush();
+    assert.equal(f.output.cancellationSafe, false); assert.equal(remount.output.cancellationSafe, false);
+    for (const source of f.audio.sources) source.end();
+    assert.equal(f.output.state, "disposed"); assert.equal(f.clock.timers.size, 0);
+  }
 });
 
-test("LocalSpeechOutput changing or clearing selection cancels speech and invalid selection stays silent", () => {
-  const f = fixture();
-  f.output.select("local-en");
-  f.output.speak("hello");
-  f.output.select("");
-  assert.equal(f.cancelCount, 1);
-  f.output.speak("not selected");
-  f.output.select("missing");
-  f.output.speak("missing");
-  assert.equal(f.utterances.length, 1);
-  f.output.dispose();
+test("ModelSpeechOutput rejected/throwing close latches unsafe even when resume/ended arrive later", async () => {
+  for (const mode of ["reject", "throw"] as const) {
+    const f = fixture(); await f.ready();
+    if (mode === "reject") f.audio.closeTask = Promise.reject(new Error("close"));
+    else f.audio.close = () => { f.audio.closes++; throw new Error("close"); };
+    void f.audio.closeTask?.catch(() => {});
+    const job = f.output.speak("hello"); await flush();
+    const late = f.audio.sources[0].onended;
+    const rejected = assert.rejects(job);
+    assert.equal(await f.output.stop(), false); await rejected;
+    late?.(); assert.equal(f.output.cancellationSafe, false);
+    assert.equal(f.audio.sources[0].buffer, null);
+  }
 });
 
-test("LocalSpeechOutput errors and 30-second timeout cancel and fence all subsequent callbacks", () => {
-  for (const outcome of ["error", "timeout", "throw"] as const) {
-    const f = fixture();
-    f.output.select("local-en");
-    if (outcome === "throw") f.failSpeak();
-    f.output.speak("hello");
-    const late = callbacks(f.utterances[0]);
-    if (outcome === "error") late.error();
-    if (outcome === "timeout") {
-      const timer = [...f.timers.values()][0];
-      assert.equal(timer.milliseconds, 30_000);
-      timer.callback();
+test("ModelSpeechOutput independently attempts mute, stop, disconnect, close and termination despite throws", async () => {
+  const f = fixture(); await f.ready(); const job = f.output.speak("hello"); await flush();
+  const source = f.audio.sources[0]; source.throwStop = true; source.throwDisconnect = true;
+  f.audio.throwGainDisconnect = true;
+  let terminated = 0; f.runtime.terminate = () => { terminated++; throw new Error("terminate"); };
+  const rejected = assert.rejects(job);
+  assert.equal(await f.output.stop(), false); await rejected;
+  assert.equal(terminated, 1); assert.equal(f.audio.gain.gain.value, 0);
+  assert.equal(source.stopped, 1); assert.equal(source.disconnected, 1); assert.equal(source.buffer, null);
+  assert.equal(f.audio.closes, 1); assert.equal(f.clock.timers.size, 0);
+});
+
+test("ModelSpeechOutput uses one source plus one in-flight chunk and reports later failures as partial", async () => {
+  const f = fixture(), second = deferred<Float32Array>();
+  f.runtime.plan = async () => 3;
+  f.runtime.chunk = async index => { f.requested.push(index); return index === 0 ? new Float32Array(240) : second.promise; };
+  await f.ready(); const job = f.output.speak("one two three"); await flush();
+  assert.deepEqual(f.requested, [0, 1]); assert.equal(f.audio.sources.length, 1);
+  assert.equal(f.output.status.playing, true); assert.equal(f.output.status.synthesizing, true);
+  const rejected = assert.rejects(job, /later chunk/);
+  second.reject(new Error("later chunk")); await rejected;
+  assert.deepEqual(f.requested, [0, 1]); assert.equal(f.audio.sources[0].stopped, 1);
+  assert.equal(f.output.status.partialPlayback, true); assert.equal(f.output.status.code, "partial-playback");
+  assert.equal(f.counts().terminated, 1);
+});
+
+test("ModelSpeechOutput queued PCM is not scheduled until previous owned source ends", async () => {
+  const f = fixture(); f.runtime.plan = async () => 3;
+  await f.ready(); const job = f.output.speak("one two three"); await flush();
+  assert.deepEqual(f.requested, [0, 1]); assert.equal(f.audio.sources.length, 1);
+  f.audio.sources[0].end(); await flush();
+  assert.deepEqual(f.requested, [0, 1, 2]); assert.equal(f.audio.sources.length, 2);
+  assert.equal(f.audio.sources[0].buffer, null);
+  f.audio.sources[1].end(); await flush(); assert.equal(f.audio.sources.length, 3);
+  f.audio.sources[2].end(); await job;
+  assert.equal(f.output.status.code, "finished"); assert.equal(f.clock.timers.size, 0);
+  await f.output.dispose();
+});
+
+test("ModelSpeechOutput rejects invalid PCM before any source is created", async () => {
+  for (const pcm of [new Float32Array(0), new Float32Array([NaN]), new Float32Array([Infinity]), new Float32Array([1.01]), new Float32Array(TTS_MAX_CHUNK_SAMPLES + 1), new Int16Array([1])]) {
+    const f = fixture(); f.runtime.chunk = async () => pcm as Float32Array;
+    await f.ready(); await assert.rejects(f.output.speak("hello"), /PCM/);
+    assert.equal(f.audio.sources.length, 0); assert.equal(f.output.ready, false);
+    assert.equal(f.output.status.partialPlayback, false); assert.equal(f.clock.timers.size, 0);
+  }
+});
+
+test("ModelSpeechOutput enforces whole PCM budget and chunk-count bounds", async () => {
+  for (const count of [0, 33, NaN, 1.5]) {
+    const f = fixture(); f.runtime.plan = async () => count;
+    await f.ready(); await assert.rejects(f.output.speak("hello"), /chunk count/);
+    assert.equal(f.requested.length, 0); assert.equal(f.audio.sources.length, 0);
+  }
+  const f = fixture(); f.runtime.plan = async () => 5;
+  f.runtime.chunk = async () => new Float32Array(TTS_MAX_CHUNK_SAMPLES);
+  await f.ready(); const job = f.output.speak("long");
+  const rejected = assert.rejects(job, /PCM/);
+  for (let index = 0; index < TTS_MAX_TOTAL_SAMPLES / TTS_MAX_CHUNK_SAMPLES - 1; index++) {
+    await flush(); f.audio.sources[index].end();
+  }
+  await rejected; assert.equal(f.output.status.partialPlayback, true);
+  assert.ok(f.audio.sources.length <= 4);
+});
+
+test("ModelSpeechOutput main-thread preparation, initialization, inactivity and absolute job deadlines settle", async () => {
+  for (const deadline of ["prepare", "initialize", "plan", "chunk", "resume", "job"] as const) {
+    const f = fixture(), blocked = deferred<never>();
+    let job: Promise<void>;
+    if (deadline === "prepare" || deadline === "initialize") {
+      f.runtime.prepare = progress => { if (deadline === "initialize") progress({ phase: "initializing" }); return blocked.promise; };
+      job = f.output.prepare();
+    } else {
+      await f.ready();
+      if (deadline === "plan") f.runtime.plan = () => blocked.promise;
+      if (deadline === "chunk") f.runtime.chunk = () => blocked.promise;
+      if (deadline === "resume") f.audio.resumeTask = blocked.promise;
+      job = f.output.speak("hello"); await flush();
     }
-    assert.equal(f.cancelCount, 1);
-    assert.equal(f.timers.size, 0);
-    assert.match(f.statuses.at(-1)!, /Text only: local speech (failed|timed out)/);
-    const count = f.statuses.length;
-    late.end(); late.error();
-    assert.equal(f.statuses.length, count);
-    assert.equal(f.utterances.length, 1);
-    f.output.dispose();
+    const rejected = assert.rejects(job, /deadline/);
+    f.clock.fire(deadline === "initialize" ? 60_000 : ["plan", "chunk", "resume"].includes(deadline) ? 120_000 : 300_000);
+    await flush();
+    if (deadline === "resume") f.clock.fire(5_000);
+    await rejected;
+    assert.equal(f.output.ready, false); assert.equal(f.counts().terminated, 1); assert.equal(f.clock.timers.size, 0);
   }
 });
 
-test("LocalSpeechOutput inventory failure is text-only and cancellation failure prevents queue growth", () => {
-  const f = fixture();
-  f.output.select("local-en");
-  f.failInventory();
-  f.output.speak("no inventory");
-  assert.equal(f.utterances.length, 0);
-  f.output.dispose();
-  const g = fixture();
-  g.output.select("local-en");
-  g.output.speak("first");
-  g.failCancel();
-  g.output.speak("second");
-  g.output.select("local-en");
-  g.output.speak("third");
-  assert.equal(g.utterances.length, 1);
-  assert.equal(g.timers.size, 0);
-  assert.match(g.statuses.at(-1)!, /cancellation failed/);
-  g.output.dispose();
+test("ModelSpeechOutput interruption stops the job; late running/ended cannot resume it", async () => {
+  const f = fixture(); await f.ready(); const job = f.output.speak("hello"); await flush();
+  const late = f.audio.sources[0].onended;
+  const rejected = assert.rejects(job, /interrupted/);
+  f.audio.state = "suspended"; f.audio.onstatechange?.(); await rejected;
+  f.audio.state = "running"; f.audio.onstatechange?.(); late?.();
+  assert.equal(f.audio.sources.length, 1); assert.equal(f.output.ready, false);
+  assert.equal(f.output.status.partialPlayback, true);
 });
 
-test("LocalSpeechOutput dispose removes listeners, cancels once and makes late calls inert", () => {
-  const f = fixture();
-  f.output.select("local-en");
-  f.output.speak("hello");
-  const late = callbacks(f.utterances[0]);
-  const lateTimeout = [...f.timers.values()][0].callback;
-  const lateListener = [...f.listeners][0] as EventListener;
-  assert.equal(f.listeners.size, 1);
-  f.output.dispose();
-  assert.equal(f.listeners.size, 0);
-  assert.equal(f.cancelCount, 1);
-  assert.equal(f.timers.size, 0);
-  const count = f.statuses.length;
-  late.end(); late.error(); lateTimeout(); lateListener(new Event("voiceschanged"));
-  f.output.select("local-en"); f.output.speak("late"); f.output.cancel(); f.output.dispose();
-  assert.deepEqual(f.output.voices(), []);
-  assert.equal(f.statuses.length, count);
-  assert.equal(f.cancelCount, 1);
-  assert.equal(f.utterances.length, 1);
+test("ModelSpeechOutput/LocalRecognizer share residency, preserve drafts and require explicit reprepare", async () => {
+  const coordinator = new SpeechCoordinator(), f = fixture(coordinator);
+  const statuses: string[] = []; let evictions = 0, terminated = 0, captures = 0;
+  const draft = "keep this typed instruction";
+  const recognizer = LocalRecognizer.createForTest({ status: message => statuses.push(message), transcript: () => assert.fail(), unprepared: () => { evictions++; } }, {
+    coordinator,
+    createRuntime: () => ({ prepare: async () => {}, transcribe: async () => "", terminate: () => { terminated++; } }),
+    openCapture: async () => { captures++; return { stop() {} }; },
+  });
+  await recognizer.prepare(); await f.ready();
+  assert.equal(recognizer.ready, false); assert.equal(evictions, 1); assert.equal(terminated, 1);
+  assert.match(statuses.at(-1)!, /unprepared/); assert.equal(draft, "keep this typed instruction");
+  await assert.rejects(recognizer.start(), /Prepare/); assert.equal(captures, 0);
+  const speaking = f.output.speak("hello"); await flush();
+  const rejected = assert.rejects(speaking);
+  await recognizer.prepare(); await rejected;
+  assert.equal(f.output.ready, false); assert.equal(f.output.enabled, true);
+  await recognizer.start();
+  await assert.rejects(f.output.prepare(), /busy/);
+  assert.equal(recognizer.state, "recording"); assert.equal(captures, 1);
+  recognizer.dispose(); await f.output.dispose();
 });
 
-test("LocalSpeechOutput cancellation safety survives disposal and wrappers sharing page synthesis", () => {
-  for (const shutdown of ["cancel", "dispose"] as const) {
+test("ModelSpeechOutput cannot acquire during recognition prepare/start/transcribe; no implicit interruption", async () => {
+  for (const phase of ["prepare", "start", "transcribe"] as const) {
+    const coordinator = new SpeechCoordinator(), f = fixture(coordinator), blocked = deferred<never>();
+    let samples!: (pcm: Float32Array) => void;
+    const recognizer = LocalRecognizer.createForTest({ status() {}, transcript() {} }, {
+      coordinator,
+      createRuntime: () => ({ prepare: () => phase === "prepare" ? blocked.promise : Promise.resolve(), transcribe: () => blocked.promise, terminate() {} }),
+      openCapture: async (_signal, receive) => { samples = receive; return phase === "start" ? blocked.promise : { stop() {} }; },
+    });
+    let pending: Promise<void>;
+    if (phase === "prepare") pending = recognizer.prepare();
+    else {
+      await recognizer.prepare();
+      if (phase === "start") pending = recognizer.start();
+      else { await recognizer.start(); samples(new Float32Array(8000).fill(0.1)); pending = recognizer.finish(); }
+    }
+    await assert.rejects(f.output.prepare(), /busy/);
+    assert.equal(f.counts().creates, 0);
+    const rejected = assert.rejects(pending);
+    recognizer.cancel(); blocked.reject(new Error("canceled fake")); await rejected; await flush();
+    assert.equal(coordinator.safe, true);
+    await f.output.dispose();
+  }
+});
+
+test("ModelSpeechOutput ready callback cancellation rejects prepare instead of publishing stale success", async () => {
+  const f = fixture();
+  f.observe(status => { if (status.code === "ready") void f.output.dispose(); });
+  await assert.rejects(f.output.prepare(), { name: "AbortError" }); await flush();
+  assert.equal(f.output.state, "disposed"); assert.equal(f.counts().terminated, 1);
+});
+
+test("ModelSpeechOutput runtime/status synchronous cancellation is fenced before await registration", async () => {
+  for (const phase of ["prepare", "plan", "chunk"] as const) {
     const f = fixture();
-    const sibling = new LocalSpeechOutput(() => {}, { ...f.dependencies });
-    f.output.select("local-en");
-    f.output.speak("still possibly audible");
-    const late = callbacks(f.utterances[0]);
-    f.failCancel();
-    assert.equal(f.output[shutdown](), false);
-    assert.equal(f.output.cancellationSafe, false);
-    assert.equal(sibling.cancellationSafe, false);
-    assert.equal(f.output.dispose(), false);
-    const statuses: string[] = [];
-    const replacement = new LocalSpeechOutput(message => statuses.push(message), { ...f.dependencies });
-    assert.equal(replacement.cancellationSafe, false);
-    assert.match(statuses.at(-1)!, /audio may still be playing.*reload this page/);
-    late.end(); late.error(); f.voicesChanged();
-    assert.equal(replacement.cancel(), false);
-    replacement.select("local-en"); replacement.speak("must not queue");
-    sibling.select("local-en"); sibling.speak("also blocked");
-    assert.deepEqual(replacement.voices(), []);
-    assert.equal(f.utterances.length, 1);
-    assert.equal(f.cancelCount, 1);
-    assert.match(statuses.at(-1)!, /Speech cancellation failed/);
-    assert.equal(replacement.dispose(), false);
-    assert.equal(sibling.dispose(), false);
-    // An independent synthesis dependency represents a fresh document, not a wrapper.
-    const fresh = fixture();
-    assert.equal(fresh.output.cancellationSafe, true);
-    fresh.output.dispose();
+    if (phase === "prepare") f.runtime.prepare = async () => { void f.output.stop(); };
+    else {
+      await f.ready();
+      if (phase === "plan") f.runtime.plan = async () => { void f.output.stop(); return 1; };
+      else f.runtime.chunk = async () => { void f.output.stop(); return new Float32Array(240); };
+    }
+    await assert.rejects(phase === "prepare" ? f.output.prepare() : f.output.speak("hello"), { name: "AbortError" });
+    await flush(); assert.equal(f.audio.sources.length, 0); assert.equal(f.output.state, "unprepared");
+    assert.equal(f.counts().terminated, 1); assert.equal(f.clock.timers.size, 0);
   }
 });
 
-test("LocalSpeechOutput successful cancellation does not block replacement output", () => {
-  const f = fixture();
-  f.output.select("local-en"); f.output.speak("first");
-  assert.equal(f.output.dispose(), true);
-  const replacement = new LocalSpeechOutput(() => {}, { ...f.dependencies });
-  assert.equal(replacement.cancellationSafe, true);
-  assert.equal(replacement.cancel(), true);
-  replacement.select("local-en"); replacement.speak("second");
-  assert.equal(f.utterances.length, 2);
-  assert.equal(replacement.dispose(), true);
+test("ModelSpeechOutput source construction/start errors clean the partially built graph", async () => {
+  for (const phase of ["buffer", "source", "connect", "start"] as const) {
+    const f = fixture(); await f.ready();
+    if (phase === "buffer") f.audio.createBuffer = () => { throw new Error("buffer failure"); };
+    else if (phase === "source") f.audio.createBufferSource = () => { throw new Error("source failure"); };
+    else {
+      const original = f.audio.createBufferSource.bind(f.audio);
+      f.audio.createBufferSource = () => {
+        const source = original();
+        source[phase] = () => { throw new Error(`${phase} failure`); };
+        return source;
+      };
+    }
+    await assert.rejects(f.output.speak("hello"), /failure/);
+    assert.equal(f.audio.closes, 1); assert.equal(f.counts().terminated, 1);
+    assert.equal(f.audio.gain.gain.value, 0); assert.equal(f.output.ready, false);
+    for (const source of f.audio.sources) { assert.equal(source.stopped, 1); assert.equal(source.buffer, null); }
+  }
 });
 
-test("LocalSpeechOutput cancellation failure is visible instead of ordinary error, timeout or voice loss", () => {
-  for (const outcome of ["error", "timeout", "voice-loss", "throw"] as const) {
-    const f = fixture();
-    f.output.select("local-en");
-    f.failCancel();
-    if (outcome === "throw") f.failSpeak();
-    f.output.speak("possibly still audible");
-    if (outcome === "error") callbacks(f.utterances[0]).error();
-    if (outcome === "timeout") [...f.timers.values()][0].callback();
-    if (outcome === "voice-loss") { f.setInventory([]); f.voicesChanged(); }
-    assert.equal(f.output.cancellationSafe, false);
-    assert.match(f.statuses.at(-1)!, /Speech cancellation failed.*audio may still be playing/);
-    assert.equal(f.output.cancel(), false);
-    f.output.dispose();
-  }
+test("ModelSpeechOutput two controllers cannot prepare together; idle handoff evicts only old weights", async () => {
+  const coordinator = new SpeechCoordinator(), first = fixture(coordinator), second = fixture(coordinator);
+  const loading = deferred<void>(); first.runtime.prepare = () => loading.promise;
+  const preparation = first.output.prepare();
+  await assert.rejects(second.output.prepare(), /busy/); assert.equal(second.counts().creates, 0);
+  loading.resolve(); await preparation; first.output.setEnabled(true);
+  await second.ready();
+  assert.equal(first.output.ready, false); assert.equal(first.output.enabled, true);
+  assert.equal(first.counts().terminated, 1); assert.equal(second.output.ready, true);
+  await first.output.stop(); assert.equal(second.output.ready, true);
+  await second.output.dispose();
+});
+
+test("ModelSpeechOutput canceled acquire stays canceled while the coordinator retains old teardown", async () => {
+  const coordinator = new SpeechCoordinator(), first = fixture(coordinator), second = fixture(coordinator);
+  const closing = deferred<void>(); first.audio.closeTask = closing.promise;
+  await first.ready(); const speaking = first.output.speak("hello"); await flush();
+  const rejectedSpeech = assert.rejects(speaking);
+  // Recognition is allowed to interrupt TTS. Cancel this acquisition before close settles.
+  const pendingOwner = { kind: "recognition" as const, phase: "preparing" as const, release: () => true };
+  const acquiring = coordinator.acquire(pendingOwner)!;
+  const rejectedAcquire = assert.rejects(acquiring, { name: "AbortError" });
+  coordinator.release(pendingOwner);
+  await assert.rejects(second.output.prepare(), /busy/);
+  closing.resolve(); await rejectedAcquire; await rejectedSpeech;
+  assert.equal(first.output.ready, false);
+  await second.ready(); assert.equal(second.output.ready, true);
+  await second.output.dispose();
+});
+
+test("ModelSpeechOutput pending resume rejection after Stop settles safely without reviving the job", async () => {
+  const f = fixture(), resume = deferred<void>(); f.audio.resumeTask = resume.promise;
+  await f.ready(); const job = f.output.speak("hello"), rejected = assert.rejects(job);
+  const stopping = f.output.stop(); resume.reject(new Error("late denial"));
+  assert.equal(await stopping, true); await rejected;
+  assert.equal(f.audio.sources.length, 0); assert.equal(f.output.ready, false);
+  assert.equal(f.clock.timers.size, 0);
+});
+
+test("ModelSpeechOutput observer exceptions cannot interrupt shutdown cleanup", async () => {
+  const f = fixture(); await f.ready(); const job = f.output.speak("hello"); await flush();
+  f.observe(() => { throw new Error("broken UI observer"); });
+  const rejected = assert.rejects(job);
+  assert.equal(await f.output.dispose(), true); await rejected;
+  assert.equal(f.audio.sources[0].stopped, 1); assert.equal(f.audio.closes, 1);
+  assert.equal(f.output.state, "disposed"); assert.equal(f.output.enabled, false);
 });

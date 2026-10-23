@@ -3,9 +3,8 @@ import { lstat, mkdir, mkdtemp, open, realpath, rename, rm } from "node:fs/promi
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import { externalOutput, externalPath, pack, speechManifest } from "./speech-assets.mjs";
-
-const header = Buffer.from("PIVOICE1", "ascii");
+import { externalOutput, externalPath, speechPack, speechManifest } from "./speech-assets.mjs";
+import { SPEECH_PACKS, speechPackKind } from "../src/browser/speech-pack-kind.ts";
 
 async function regularOutput(output) {
   try {
@@ -15,12 +14,13 @@ async function regularOutput(output) {
 }
 
 // The CLI always uses the compiled manifest, never metadata from the input pack.
-export async function exportSpeechPack(input, output, assets = undefined) {
+export async function exportSpeechPack(input, output, assets = undefined, kind = "recognition") {
+  const header = Buffer.from(SPEECH_PACKS[speechPackKind(kind)].magic, "ascii");
   input = await externalOutput(input);
   output = await externalPath(output);
   if (extname(output) !== ".pivoice") throw new Error("Speech export --output must end in .pivoice");
   await regularOutput(output);
-  assets ??= await speechManifest();
+  assets ??= await speechManifest(kind);
   await mkdir(dirname(output), { recursive: true });
   output = join(await realpath(dirname(output)), basename(output));
   const temporary = await mkdtemp(join(dirname(output), ".pivoice-export-"));
@@ -57,7 +57,9 @@ export async function exportSpeechPack(input, output, assets = undefined) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  const { values } = parseArgs({ options: { input: { type: "string" }, output: { type: "string" } } });
-  const bytes = await exportSpeechPack(values.input, values.output);
-  console.log(`Exported verified speech pack: ${values.output} (${bytes} bytes).\nCopy this .pivoice file to your phone and explicitly import it in Voice. No server route is needed.\nKeep the source pack's provenance and license notices separately; the import contains only pinned asset bytes.\nLicense/release review remains required: ${pack.licenseNote}`);
+  const { values } = parseArgs({ options: { input: { type: "string" }, output: { type: "string" }, pack: { type: "string", default: "recognition" } } });
+  const kind = speechPackKind(values.pack);
+  const pack = speechPack(kind);
+  const bytes = await exportSpeechPack(values.input, values.output, undefined, kind);
+  console.log(`Exported verified speech pack: ${values.output} (${bytes} bytes).\nThis .pivoice file is for the ${kind} pack only; it cannot be imported as the other pack kind. No server route is needed.\nKeep the source pack's provenance and license notices separately; the import contains only pinned asset bytes.\nLicense/release review remains required: ${pack.licenseNote}`);
 }

@@ -3,6 +3,9 @@ import { LocalRecognizer, type LocalRecognitionCallbacks, type LocalRecognitionD
 import "../src/browser/index.ts";
 import type { WorkspacePanelContext } from "@jmfederico/pi-web/plugin-api";
 import type { Worker } from "../src/protocol.ts";
+import { pageSpeechCoordinator } from "../src/browser/speech-coordinator.js";
+import type { TtsProgress } from "../src/browser/tts-contract.js";
+import type { SpeechPreparation } from "../src/browser/speech-assets.js";
 
 const stats = {
   stops: 0, captures: 0, preparations: 0, terminations: 0, transcriptions: 0, instructions: 0,
@@ -10,12 +13,17 @@ const stats = {
   disarms: [] as string[], requests: [] as { workspaceId: string; operation: string; input: any }[],
   pendingPermission: false, pendingArm: false, pendingPrepare: false, pendingTranscript: false, pendingRead: false,
   failSpeechCancel: false, failExecute: false, spoken: [] as { text: string; voiceURI?: string }[], speechCancels: 0, navigations: [] as unknown[],
+  ttsPreparations: 0, ttsRuntimes: 0, ttsTerminations: 0, ttsPlans: [] as string[], ttsChunks: 0,
+  ttsAcquisitions: [] as { source: string; bytes?: number }[],
+  audioContexts: 0, audioCloses: 0, audioDisconnects: 0, resumedInGesture: [] as boolean[],
+  pendingTtsPrepare: false, pendingPlan: false, pendingChunk: false, pendingResume: false, pendingClose: false,
+  failResume: false, failClose: false, failChunk: false, ttsChunkCount: 1, failChunkAt: -1,
 };
 let permissionResolve: (() => void) | undefined;
 let armResolve: (() => void) | undefined;
 let prepareResolve: (() => void) | undefined;
 let transcriptResolve: ((value: string) => void) | undefined;
-let readResolve: (() => void) | undefined;
+const readResolvers: Array<() => void> = [];
 let progress: ((message: string) => void) | undefined;
 let samples: ((pcm: Float32Array) => void) | undefined;
 let resultText = "<img src=x onerror=alert('bad')> Escaped result";
@@ -23,6 +31,7 @@ const pcm = (length = 8000) => Float32Array.from({ length }, (_, i) => Math.sin(
 const media = { getUserMedia: async () => { throw new Error("Fixture capture must use the injected PCM seam"); } };
 Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: media });
 const dependencies: LocalRecognitionDependencies = {
+  coordinator: pageSpeechCoordinator(),
   createRuntime: () => ({
     async prepare(status, options = { source: "cache" }) {
       stats.acquisitions.push({ source: options.source, ...(options.source === "import" ? { bytes: options.file.size } : {}) });
@@ -53,18 +62,72 @@ class FixtureRecognizer {
   constructor(callbacks: LocalRecognitionCallbacks) { return LocalRecognizer.createForTest(callbacks, dependencies); }
 }
 export { FixtureRecognizer as LocalRecognizer };
-const voice = (voiceURI: string, localService: boolean, lang = "en-US") => ({ voiceURI, name: voiceURI, localService, lang, default: false }) as SpeechSynthesisVoice;
-let voices = [voice("Local English", true), voice("Remote English", false), voice("Local French", true, "fr-FR")];
-const voiceEvents = new EventTarget();
-let lateSpeechEnd: (() => void) | undefined;
-Object.defineProperty(globalThis, "speechSynthesis", { configurable: true, value: {
-  getVoices: () => voices,
-  speak(utterance: SpeechSynthesisUtterance) { const onend = utterance.onend; lateSpeechEnd = () => onend?.call(utterance, {} as SpeechSynthesisEvent); stats.spoken.push({ text: utterance.text, voiceURI: utterance.voice?.voiceURI }); },
-  cancel() { stats.speechCancels++; if (stats.failSpeechCancel) throw new Error("Fixture speech cancellation failed"); },
-  addEventListener: voiceEvents.addEventListener.bind(voiceEvents),
-  removeEventListener: voiceEvents.removeEventListener.bind(voiceEvents),
-} });
-Object.defineProperty(globalThis, "SpeechSynthesisUtterance", { configurable: true, value: class { voice = null; lang = ""; onend = null; onerror = null; constructor(public text: string) {} } });
+// Accessing either OS speech API is a test failure, including during panel mounting.
+for (const key of ["speechSynthesis", "SpeechSynthesisUtterance"]) Object.defineProperty(globalThis, key, { configurable: true, get() { throw new Error("OS speech API forbidden"); } });
+let ttsPrepareResolve: (() => void) | undefined, planResolve: (() => void) | undefined, chunkResolve: (() => void) | undefined;
+let resumeResolve: (() => void) | undefined, closeResolve: (() => void) | undefined;
+let lateSpeechEnd: (() => void) | undefined, endSpeech: (() => void) | undefined;
+let currentTtsText = "";
+class FixtureTtsRuntime {
+  constructor() { stats.ttsRuntimes++; }
+  async prepare(status: (progress: TtsProgress) => void, options: SpeechPreparation = { source: "cache" }) {
+    stats.ttsPreparations++;
+    stats.ttsAcquisitions.push({ source: options.source, ...(options.source === "import" ? { bytes: options.file.size } : {}) });
+    status({ phase: "checking", checkedBytes: 5, totalBytes: 10 });
+    if (stats.pendingTtsPrepare) await new Promise<void>(resolve => { ttsPrepareResolve = resolve; });
+    status({ phase: "initializing" });
+  }
+  async plan(text: string) {
+    stats.ttsPlans.push(text); currentTtsText = text;
+    if (stats.pendingPlan) await new Promise<void>(resolve => { planResolve = resolve; });
+    return stats.ttsChunkCount;
+  }
+  async chunk(index: number) {
+    stats.ttsChunks++;
+    if (stats.pendingChunk) await new Promise<void>(resolve => { chunkResolve = resolve; });
+    if (stats.failChunk || index === stats.failChunkAt) throw new Error("Fixture synthesis failure");
+    return new Float32Array(2400).fill(0.1);
+  }
+  terminate() { stats.ttsTerminations++; }
+}
+export { FixtureTtsRuntime as WorkerTtsRuntime };
+class FixtureAudioContext {
+  state: AudioContextState = "suspended";
+  destination = {};
+  onstatechange: (() => void) | null = null;
+  constructor() { stats.audioContexts++; }
+  async resume() {
+    stats.resumedInGesture.push(navigator.userActivation.isActive);
+    if (stats.pendingResume) await new Promise<void>(resolve => { resumeResolve = resolve; });
+    if (stats.failResume) throw new Error("Fixture resume rejected");
+    if (this.state !== "closed") this.state = "running";
+  }
+  async close() {
+    stats.audioCloses++;
+    if (stats.pendingClose) await new Promise<void>(resolve => { closeResolve = resolve; });
+    if (stats.failClose) throw new Error("Fixture close rejected");
+    this.state = "closed";
+  }
+  createGain() { return { gain: { value: 1 }, connect() {}, disconnect() { stats.audioDisconnects++; } }; }
+  createBuffer(channels: number, length: number, rate: number) {
+    if (channels !== 1 || rate !== 24000 || length > 720000) throw new Error("Invalid playback buffer");
+    return { copyToChannel(data: Float32Array, channel: number) { if (data.length !== length || channel !== 0) throw new Error("Invalid PCM copy"); } };
+  }
+  createBufferSource() {
+    const source = { buffer: null as unknown, onended: null as (() => void) | null, connect() {},
+      disconnect() { stats.audioDisconnects++; },
+      start() {
+        const callback = source.onended;
+        lateSpeechEnd = () => callback?.();
+        endSpeech = () => source.onended?.();
+        stats.spoken.push({ text: currentTtsText, voiceURI: "af_heart" });
+      },
+      stop() { stats.speechCancels++; if (stats.failSpeechCancel) throw new Error("Fixture source stop failed"); },
+    };
+    return source;
+  }
+}
+Object.defineProperty(globalThis, "AudioContext", { configurable: true, value: FixtureAudioContext });
 const workspaceWorkers = new Map<string, Worker[]>();
 let context: WorkspacePanelContext;
 function makeContext(workspaceId: string, sessionId = "catalog-session") {
@@ -98,8 +161,9 @@ function makeContext(workspaceId: string, sessionId = "catalog-session") {
           workers.push(w); return structuredClone(w);
         }
         case "read": {
-          if (stats.pendingRead) await new Promise<void>(resolve => { readResolve = resolve; });
-          return { ...workers.find(w => w.id === input.workerId), text: resultText };
+          const result = { ...workers.find(w => w.id === input.workerId), text: resultText };
+          if (stats.pendingRead) await new Promise<void>(resolve => { readResolvers.push(resolve); });
+          return result;
         }
         case "models": return [{ id: "test/model", name: "Test model" }];
         default: throw new Error(`Unknown fixture request: ${operation}`);
@@ -124,12 +188,17 @@ mount();
   resolveArm() { stats.pendingArm = false; armResolve?.(); },
   resolvePrepare() { stats.pendingPrepare = false; progress?.("Late pack progress"); prepareResolve?.(); },
   resolveTranscript(value = "Late canceled transcript") { stats.pendingTranscript = false; transcriptResolve?.(value); },
-  resolveRead() { stats.pendingRead = false; readResolve?.(); },
+  resolveRead(index = 0) { stats.pendingRead = false; readResolvers.splice(index, 1)[0]?.(); },
   reachLimit() { samples?.(pcm(320000)); },
   setResult(value: string) { resultText = value; },
   bumpRevision() { workspaceWorkers.get(context.workspace.id)![0].revision++; },
-  removeLocalVoices() { voices = [voice("Remote English", false)]; voiceEvents.dispatchEvent(new Event("voiceschanged")); },
+  endSpeech() { endSpeech?.(); },
   lateSpeechEnd() { lateSpeechEnd?.(); },
+  resolveTtsPrepare() { stats.pendingTtsPrepare = false; ttsPrepareResolve?.(); },
+  resolvePlan() { stats.pendingPlan = false; planResolve?.(); },
+  resolveChunk() { stats.pendingChunk = false; chunkResolve?.(); },
+  resolveResume() { stats.pendingResume = false; resumeResolve?.(); },
+  resolveClose() { stats.pendingClose = false; closeResolve?.(); },
   setMediaSupported(supported: boolean) { Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: supported ? media : undefined }); },
   setSecureContext(secure: boolean) { Object.defineProperty(globalThis, "isSecureContext", { configurable: true, value: secure }); },
   setHidden(hidden: boolean) { Object.defineProperty(document, "hidden", { configurable: true, value: hidden }); document.dispatchEvent(new Event("visibilitychange")); },

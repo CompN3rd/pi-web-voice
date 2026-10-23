@@ -1,0 +1,43 @@
+Pi Web Voice experimental browser-model TTS notices
+
+Kokoro model/voice candidate:
+  onnx-community/Kokoro-82M-v1.0-ONNX
+  revision 1939ad2a8e416c0acfeecc08a694d14ef25f2231
+  voice af_heart; normal speed; mono 24 kHz
+  The exact converted model card declares Apache-2.0. Retain that model
+  card with externally provisioned assets. No independent voice-rights
+  chain or real-device acceptance is asserted by this notice.
+
+Kokoro JavaScript adapter references:
+  kokoro-js 1.2.1, hexgrad/kokoro; Apache-2.0.
+  The plugin bypasses upstream voice download/cache and truncating
+  generation helpers. Any adapted normalization/tensor logic is modified
+  for verified assets, bounded input/output, and no-loss preflight.
+  See KOKORO-JS-LICENSE and source-file attribution.
+
+Phonemizer wrapper:
+  phonemizer 1.2.1, xenova/phonemizer.js
+  wrapper revision 6835144b7ee9043129222549c1ed2f6a27216278
+  Published wrapper/package license: Apache-2.0 (PHONEMIZER-LICENSE).
+
+Embedded eSpeak-derived engine/data:
+  eSpeak NG, GPL-3.0-or-later; see ESPEAK-NG-COPYING.
+  The wrapper's Apache label is NOT a license declaration for every
+  embedded engine/data component. The native engine's exact source,
+  patches, toolchain and corresponding-source package are unverified.
+  Candidate upstream reference (NOT verified build correspondence):
+  https://github.com/espeak-ng/espeak-ng/tree/0dfd1d77dd7f96ef1ea6856c9fa5cfac01599582/emscripten
+  GPL text copied from that revision's COPYING (SHA-256):
+  8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903
+
+Transformers.js and ONNX Runtime:
+  Retain TRANSFORMERS-LICENSE and ort/LICENSE respectively. Versions and
+  runtime hashes are in speech-pack-provenance.json.
+
+RELEASE/CONVEYANCE BLOCKED pending corresponding-source, combined-work
+license obligations, voice provenance and owner review. Private:true is
+not an exemption when executable code/assets are sent to other people.
+This notice is not a source offer or legal clearance. Do not invent a
+source correspondence or rely on a third party's written offer.
+
+See TTS-QUALIFICATION.md for evidence boundaries and remaining gates.

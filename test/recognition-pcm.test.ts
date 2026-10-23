@@ -30,3 +30,18 @@ test("hasSpeechEnergy rejects silence, short sounds, quiet noise, invalid and ov
   assert.equal(hasSpeechEnergy(new Float32Array(MAX_PCM_SAMPLES + 1).fill(0.1)), false);
   assert.equal(hasSpeechEnergy(new Float32Array(8000).fill(0.1)), true);
 });
+
+test("hasSpeechEnergy validates the trailing partial frame without counting it as a full active frame", () => {
+  for (const tail of [1, 160, 319]) {
+    const pcm = new Float32Array(8000 + tail).fill(0.1);
+    assert.equal(hasSpeechEnergy(pcm), true);
+    for (const invalid of [NaN, Infinity, -Infinity]) {
+      pcm[pcm.length - 1] = invalid;
+      assert.equal(hasSpeechEnergy(pcm), false);
+    }
+  }
+  const shortBurst = new Float32Array(4001);
+  shortBurst.fill(0.1, 0, 4 * 320);
+  shortBurst.fill(0.5, 3840);
+  assert.equal(hasSpeechEnergy(shortBurst), false);
+});

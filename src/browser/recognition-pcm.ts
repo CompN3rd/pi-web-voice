@@ -36,13 +36,14 @@ export function hasSpeechEnergy(pcm: Float32Array): boolean {
   if (pcm.length < SPEECH_SAMPLE_RATE / 4 || pcm.length > MAX_PCM_SAMPLES) return false;
   let activeFrames = 0;
   const frame = 320; // At least 100 ms above -40 dBFS in 20 ms frames.
-  for (let i = 0; i + frame <= pcm.length; i += frame) {
+  for (let i = 0; i < pcm.length; i += frame) {
+    const end = Math.min(i + frame, pcm.length);
     let power = 0;
-    for (let j = i; j < i + frame; j++) {
+    for (let j = i; j < end; j++) {
       if (!Number.isFinite(pcm[j])) return false;
       power += pcm[j] ** 2;
     }
-    if (power / frame >= 0.0001) activeFrames++;
+    if (end - i === frame && power / frame >= 0.0001) activeFrames++;
   }
   return activeFrames >= 5;
 }

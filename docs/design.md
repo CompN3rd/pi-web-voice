@@ -2,7 +2,9 @@
 
 ## Decision
 
-The owner requires **no separately billed audio service** and targets a **Google Pixel 8 running the browser**. “Local” means that phone, not the Pi Web server. The original OpenAI Realtime design is retired: no Realtime endpoint, API key, WebRTC provider session, or cloud speech fallback remains in the intended architecture.
+**Implemented playback decision:** English-only Whisper tiny.en recognition and Kokoro `af_heart` synthesis run in separate browser workers. OS `speechSynthesis` and remote/system/alternate-voice fallbacks are removed. Exact inventory/runtime pins and automated loader/controller checks are recorded in [qualification](tts-qualification.md); full-model TTS, Pixel and live-host acceptance remain unrun. [ADR 0002](adr/0002-browser-model-tts.md) remains the delivery contract, including unresolved license gates.
+
+The owner requires **no separately billed audio service** and targets a **Google Pixel 8 running the browser**. “Local” means that phone, not the Pi Web server. The original OpenAI Realtime design is retired: no Realtime endpoint, API key, WebRTC provider session, or cloud recognition fallback remains in the intended architecture.
 
 Speech is an input/output adapter for ordinary Pi text workers. It is not another autonomous agent and does not interpret results as commands.
 
@@ -17,7 +19,7 @@ Pi Web public package peer → durable admission ledger → ordinary Pi worker
                                                        ↓
 Phone text display ← bounded result/question ← companion settlement
        ↓ explicit playback
-Browser/OS voice marked local → phone speaker
+Kokoro worker → bounded mono 24 kHz PCM → owned Web Audio → phone speaker
 ```
 
 The phone loads application code from Pi Web and acquires speech assets through verified cache, explicit pinned public downloads or local file import; see [ADR 0001](adr/0001-browser-owned-speech-pack-acquisition.md). Approved task text goes to Pi Web and the worker's configured provider. Audio does not go to the Pi Web backend or an inference service. Local speech does **not** make text workers offline or change their provider billing/limits.
@@ -41,9 +43,15 @@ Native `SpeechRecognition` is deliberately not used: desktop support for `proces
 
 ## Playback
 
-Only explicitly selected English voices reporting `localService === true` are eligible. Re-resolve locality before every playback; never fall back to an unspecified/default or remote voice. No suitable voice means text-only output. Capture and playback are half-duplex: starting capture cancels playback. Stop speaking only cancels speech, not workers.
+The adapter uses the project's pinned Transformers.js public `StyleTextToSpeech2Model`, `AutoTokenizer` and `Tensor` APIs, not upstream Kokoro voice-download/cache or truncating generation helpers. Only quantized Kokoro and verified `af_heart` voice bytes at normal speed are allowed. Guarded bootstrap installs transport restrictions before dependency evaluation; initialization/inference read only verified compiled assets. The phonemizer also executes in the worker. No alternate engine is selected on failure.
 
-`localService` is a browser/OS assertion, not network attestation. Android's TTS engine may have behavior outside browser network interception. Actual Pixel airplane-mode playback and device-level traffic checks remain mandatory before claiming verified offline speech.
+Separate explicit acquisition/preparation, English Heart enablement and Speak controls are required; preparation is silent. Speak resumes an owned Web Audio context from the user gesture before awaiting synthesis. Playback shows the exact selected prefix (at most 1,000 UTF-16 code units, without splitting surrogate pairs), plans bounded chunks against the actual tokenizer budget without truncation, and conservatively rejects unsupported text rather than silently dropping it. Full text remains available. English-only is not a language-detection or pronunciation guarantee. PCM is transient, mono 24 kHz, with bounded chunks, queue and job duration; no generated recordings are saved.
+
+A document-level speech coordinator allows one heavyweight speech runtime at a time and controls pack-specific cache clearing. Preparing one pack releases the other's idle runtime and resets its readiness, without clearing typed drafts, workers or cached assets. TTS cannot prepare during recording/transcription. Stop speaking cancels TTS preparation/synthesis/playback and releases its worker/weights; it requires explicit reprepare but does not revoke instruction approvals or stop coding workers. Full off, hide/pagehide and context/target/model changes revoke broader permissions; stale source/revision invalidation discards affected work. Returning to visibility never resumes audio.
+
+Capture tracks stop synchronously; asynchronous capture-context close/resume settlement remains owned until safe completion. Playback teardown likewise retains ownership until settled. Audio stays blocked during teardown. Failure or the five-second deadline latches audio unsafe across controller recreation and panel remounts until document reload. Cleanup attempts independent resources even after a failure. This controls plugin audio in one document, not other tabs or unrelated host audio.
+
+Separate file-picker tickets fence each pack's import; picker-induced hide preserves at most a selection ticket, never audio/permission authority. Clear-this-pack first cancels selected resident use under a coordinator reservation, then removes only its exact compiled cache identity. It preserves the other pack, host data, old cache revisions and safety latches; another tab's verified in-memory weights are not canceled.
 
 ## Authority and interaction
 
@@ -66,15 +74,15 @@ The text backend retains its existing scoped allowance protocol for compatibilit
 
 ## Packaging and compatibility
 
-Retain public browser API 4 / server API 3 for Pi Web `1.202610.3`, and companion `1.2.0`. Do not use private session routes, provider credential stores or API5 examples. Keep the package private and disabled by default. Worker/worklet JavaScript resolves relative to the plugin's served browser directory. The pinned host limits the entire plugin artifact to 16 MiB, so the approximately 65 MB model/runtime pack is acquired directly by the browser, through explicit pinned download or verified file import. No custom host route or reverse-proxy mapping is required. Developer provisioning/export is optional and never an install lifecycle hook. Synthetic runtime cache URLs are internal keys only, not fetched routes. Keep large source/export files outside installed plugin roots. See `deployment.md` and ADR 0001.
+Retain public browser API 4 / server API 3 for Pi Web `1.202610.3`, and companion `1.2.0`. Do not use private session routes, provider credential stores or API5 examples. Keep the package private and disabled by default. Worker/worklet JavaScript resolves relative to the plugin's served browser directory. The pinned host limits the entire plugin artifact to 16 MiB, so the approximately 65 MB recognition and 116 MB TTS packs are acquired separately by the browser, through explicit pinned download or verified file import. No custom host route or reverse-proxy mapping is required. Developer provisioning/export is optional and never an install lifecycle hook. Synthetic runtime cache URLs are internal keys only, not fetched routes. Keep large source/export files outside installed plugin roots. See `deployment.md` and ADR 0001.
 
-Converted-model license labels differ across upstream/model cards; retain provenance and license notices and resolve redistribution requirements before release. A local build/prototype is not release approval.
+The build is approximately 4.72 MB uncompressed, including two Transformers worker bundles but excluding external packs. Converted-model/voice provenance and embedded eSpeak native corresponding-source and combined GPL obligations remain release/conveyance blockers. Retain notices; neither a successful build nor `private: true` is license clearance.
 
 ## Device acceptance and future work
 
 First validate the real-host asset URLs/CSP and the Pixel 8 foreground workflow over authenticated HTTPS. Test short English commands, silence, noise, long utterances, cancellation, memory pressure, cache eviction, permission denial, headset routing and screen locking. No background/locked-screen/driving guarantee is made.
 
-Only after basic acceptance consider WebGPU acceleration, multilingual packs, a fully bundled local TTS model, conversational routing or wake-word processing. Durable notifications, safe retention tooling and explicit worker control remain separate reliability milestones. Do not expand scope into a native app or paid provider without owner approval.
+Browser-model TTS is implemented under ADR 0002 but is not model/device-qualified; acquire its verified assets separately rather than bundling large weights into the plugin. Only after basic acceptance consider WebGPU acceleration, multilingual packs, conversational routing or wake-word processing. Durable notifications, safe retention tooling and explicit worker control remain separate reliability milestones. Do not expand scope into a native app or paid provider without owner approval.
 
 ## Research sources
 
@@ -84,6 +92,5 @@ Only after basic acceptance consider WebGPU acceleration, multilingual packs, a 
 - [ONNX Runtime Web flags and asset matching](https://onnxruntime.ai/docs/tutorials/web/env-flags-and-session-options.html)
 - [Whisper tiny.en converted model files](https://huggingface.co/onnx-community/whisper-tiny.en/tree/main)
 - [MDN SpeechRecognition compatibility data](https://github.com/mdn/browser-compat-data/blob/main/api/SpeechRecognition.json)
-- [MDN localService](https://developer.mozilla.org/en-US/docs/Web/API/SpeechSynthesisVoice/localService)
 
 Sources establish API candidates, not measured Pixel performance. See `validation.md` for executed checks and remaining gates.

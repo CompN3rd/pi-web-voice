@@ -9,7 +9,7 @@ export const MAX_PACKAGE_BYTES = 16 * 1024 * 1024;
 export function checkInventory(files, label = "package") {
   let total = 0;
   for (const file of files) {
-    if (/(^|\/)models\/|\.(?:onnx|wasm|bin|ort|pivoice)$|(^|\/)ort-wasm[^/]*\.(?:mjs|js)$/i.test(file.path)) {
+    if (/(^|\/)models\/|\.(?:onnx|wasm|bin|ort|pivoice)$|(^|\/)ort-wasm[^/]*\.(?:mjs|js)$|(^|\/)phonemizer\.(?:js|cjs)$/i.test(file.path)) {
       throw new Error(`${label} contains external speech payload: ${file.path}`);
     }
     total += file.size;
@@ -34,11 +34,14 @@ export async function checkBrowserDirectory(root) {
   return bytes;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  if (!process.env.npm_execpath) throw new Error("Run through npm run check:package");
+export function checkPackage() {
+  if (!process.env.npm_execpath) throw new Error("Run the build/package gate through npm run build or npm run check:package");
   const output = execFileSync(process.execPath, [process.env.npm_execpath, "pack", "--dry-run", "--json", "--ignore-scripts"], { encoding: "utf8", maxBuffer: 10 * 1024 * 1024 });
   const [result] = JSON.parse(output);
   const bytes = checkInventory(result.files);
   if (bytes !== result.unpackedSize) throw new Error("npm package inventory/unpacked size mismatch");
   console.log(`Package: ${result.files.length} files, ${bytes} / ${MAX_PACKAGE_BYTES} uncompressed bytes (tarball ${result.size} bytes); no external speech payload`);
+  return bytes;
 }
+
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) checkPackage();

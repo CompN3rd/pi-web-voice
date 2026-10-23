@@ -9,16 +9,17 @@ const errorText = (error: unknown) => (error instanceof Error ? error.message : 
 export function parseCommand(input: unknown): Command {
   const c = record(input);
   const base = { requestId: uuid(c.requestId), prompt: text(c.prompt, "prompt") };
-  if (c.kind === "start") return { ...base, kind: "start", title: text(c.title, "title", 100), ...(c.model ? { model: text(c.model, "model", MAX_MODEL) } : {}) };
+  if (c.kind === "start") return { ...base, kind: "start", title: text(c.title, "title", 100), ...(c.model === undefined ? {} : { model: text(c.model, "model", MAX_MODEL) }) };
   if (c.kind === "reply" && Number.isSafeInteger(c.expectedRevision) && Number(c.expectedRevision) > 0) return { ...base, kind: "reply", workerId: uuid(c.workerId), expectedRevision: Number(c.expectedRevision) };
   throw new Error("Invalid command");
 }
 function parseSnapshot(input: unknown): Snapshot {
   const s = record(input);
-  if (!["running", "needs-input", "completed", "failed", "unknown"].includes(String(s.status))) throw new Error("Invalid worker status");
+  if (typeof s.status !== "string" || !["running", "needs-input", "completed", "failed", "unknown"].includes(s.status)) throw new Error("Invalid worker status");
   if (typeof s.text !== "string" || s.text.length > MAX_TEXT) throw new Error("Invalid worker text");
+  if (typeof s.model !== "string" || s.model.length > MAX_MODEL) throw new Error("Invalid worker model");
   if (!Number.isSafeInteger(s.sequence) || Number(s.sequence) < 0) throw new Error("Invalid companion sequence");
-  return { workerId: uuid(s.workerId), sequence: Number(s.sequence), status: s.status as Snapshot["status"], text: s.text, model: typeof s.model === "string" && s.model.length <= MAX_MODEL ? s.model : "default", ...(s.question ? { question: text(s.question, "question", MAX_TEXT) } : {}) };
+  return { workerId: uuid(s.workerId), sequence: Number(s.sequence), status: s.status as Snapshot["status"], text: s.text, model: s.model, ...(s.question === undefined ? {} : { question: text(s.question, "question", MAX_TEXT) }) };
 }
 
 /** Durable admission, exact session correlation, no automatic mutation retries. */
@@ -27,10 +28,13 @@ export class VoiceService {
   private leases = new Map<string, Lease>();
   private connections = new Map<string, PiWebHostPiSessionConnection>();
   private ledgers = new Map<string, Ledger>();
-  private disposed = false;
+  private disposal = new AbortController();
+  private lifetime: AbortSignal;
   private persistenceError = "";
   private tasks = new Set<Promise<void>>();
-  constructor(private store: Store, private sessions: PiWebHostPiSessionsV1, private events: PiWebHostPiSessionEventsV1, private lifetime: AbortSignal) {}
+  constructor(private store: Store, private sessions: PiWebHostPiSessionsV1, private events: PiWebHostPiSessionEventsV1, lifetime: AbortSignal) {
+    this.lifetime = AbortSignal.any([lifetime, this.disposal.signal]);
+  }
   private serial<T>(fn: () => Promise<T>): Promise<T> {
     const result = this.queue.then(fn);
     this.queue = result.catch(() => {});
@@ -67,7 +71,10 @@ export class VoiceService {
     if (token === undefined || this.leases.get(key)?.token === token) this.leases.delete(key);
   }
   async list(scope: Scope): Promise<Worker[]> {
-    const workers = await this.serial(async () => structuredClone((await this.ledger(scope)).workers));
+    const workers = await this.serial(async () => {
+      this.lifetime.throwIfAborted();
+      return structuredClone((await this.ledger(scope)).workers);
+    });
     // Reconcile only already-hosted conversations. Public connect never opens saved sessions.
     await Promise.all(workers.filter(w => w.sessionId).map(async w => {
       try {
@@ -76,12 +83,18 @@ export class VoiceService {
         if (result.snapshot) await this.update(scope, w.id, parseSnapshot(result.snapshot), connection);
       } catch { /* Unknown stays unknown. A transport failure is not completion. */ }
     }));
-    return this.serial(async () => structuredClone((await this.ledger(scope)).workers));
+    return this.serial(async () => {
+      this.lifetime.throwIfAborted();
+      return structuredClone((await this.ledger(scope)).workers);
+    });
   }
   async models(scope: Scope, sessionId: unknown) {
+    this.lifetime.throwIfAborted();
     const connection = await this.events.connect({ ...scope, sessionId: text(sessionId, "session ID", 512) });
     try {
+      this.lifetime.throwIfAborted();
       const response = await this.rpc(connection, { operation: "models" });
+      this.lifetime.throwIfAborted();
       if (!Array.isArray(response.models)) throw new Error("Invalid model catalog");
       return response.models.map(value => { const m = record(value); return { id: text(m.id, "model ID", MAX_MODEL), name: text(m.name, "model name", MAX_MODEL) }; });
     } finally { connection.close(); }
@@ -91,7 +104,6 @@ export class VoiceService {
     const command = parseCommand(data.command);
     return this.serial(async () => {
       this.lifetime.throwIfAborted();
-      if (this.disposed) throw new Error("Voice backend disposed");
       if (this.persistenceError) throw new Error(this.persistenceError);
       const ledger = await this.ledger(scope);
       const hash = fingerprint(command);
@@ -103,6 +115,7 @@ export class VoiceService {
       const lease = this.leases.get(scopeKey(scope.projectId, scope.workspaceId));
       if (!lease || lease.token !== data.token || lease.expiresAt <= Date.now() || lease.remaining < 1) throw new Error("Approve this instruction or arm a fresh allowance first");
       if (ledger.receipts.length >= 1000 || (command.kind === "start" && ledger.workers.length >= 30)) throw new Error("Voice ledger capacity reached; archive it offline before admitting more work");
+      if (ledger.workers.filter(w => ["starting", "running", "unknown"].includes(w.status)).length >= 3) throw new Error("At most three active or uncertain workers per workspace");
       let worker: Worker;
       if (command.kind === "reply") {
         const found = ledger.workers.find(w => w.id === command.workerId);
@@ -116,7 +129,6 @@ export class VoiceService {
         worker.revision++;
         worker.updatedAt = new Date().toISOString();
       } else {
-        if (ledger.workers.filter(w => ["starting", "running", "unknown"].includes(w.status)).length >= 3) throw new Error("At most three active or uncertain workers per workspace");
         worker = { id: command.requestId, ...scope, sessionId: "", title: command.title!, model: command.model ?? "default", status: "starting", text: "Instruction admitted; session creation pending.", revision: 1, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
         ledger.workers.push(worker);
       }
@@ -153,11 +165,12 @@ export class VoiceService {
     }
   }
   private async connect(scope: Scope, worker: Worker) {
+    this.lifetime.throwIfAborted();
     const key = `${scopeKey(scope.projectId, scope.workspaceId)}:${worker.id}`;
     const existing = this.connections.get(key);
     if (existing && !existing.signal.aborted) return existing;
     const connection = await this.events.connect({ ...scope, sessionId: worker.sessionId });
-    if (this.disposed) { connection.close(); throw new Error("Voice disposed"); }
+    if (this.lifetime.aborted) { connection.close(); this.lifetime.throwIfAborted(); }
     const raced = this.connections.get(key);
     if (raced && !raced.signal.aborted) { connection.close(); return raced; }
     this.connections.set(key, connection);
@@ -222,7 +235,7 @@ export class VoiceService {
     });
   }
   async dispose() {
-    this.disposed = true;
+    this.disposal.abort(new Error("Voice backend disposed"));
     this.leases.clear();
     for (const connection of this.connections.values()) connection.close();
     this.connections.clear();

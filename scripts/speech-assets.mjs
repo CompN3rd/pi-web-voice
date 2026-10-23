@@ -2,39 +2,58 @@ import { createHash } from "node:crypto";
 import { copyFile, lstat, mkdir, readFile, readdir, realpath } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { speechPackKind } from "../src/browser/speech-pack-kind.ts";
 
 export const packageRoot = fileURLToPath(new URL("../", import.meta.url));
 const runtimeFiles = [
   { path: "ort-wasm-simd-threaded.jsep.mjs", bytes: 44484, sha256: "08fb86ec433c78bfb032c5d84a68b8e8e5a8d81268fa39e24314179a5767a5b9" },
   { path: "ort-wasm-simd-threaded.jsep.wasm", bytes: 21596019, sha256: "c46655e8a94afc45338d4cb2b840475f88e5012d524509916e505079c00bfa39" },
 ];
-export const runtimeNames = runtimeFiles.map(file => file.path);
 export const sha256 = bytes => createHash("sha256").update(bytes).digest("hex");
 export const validAsset = (bytes, asset) => bytes.length === asset.bytes && sha256(bytes) === asset.sha256;
 export const pack = JSON.parse(await readFile(new URL("./speech-pack.json", import.meta.url), "utf8"));
 
-export async function speechManifest() {
-  for (const [name, version] of [["onnxruntime-web", pack.onnxRuntime], ["@huggingface/transformers", pack.transformers]]) {
+const ttsPack = JSON.parse(await readFile(new URL("./tts-pack.json", import.meta.url), "utf8"));
+export function speechPack(kind = "recognition") { return speechPackKind(kind) === "tts" ? ttsPack : pack; }
+export function speechCacheName(kind, assets) {
+  const prefix = speechPackKind(kind) === "tts" ? "pi-voice-tts" : "pi-voice-speech";
+  return `${prefix}-${sha256(JSON.stringify(assets)).slice(0, 24)}`;
+}
+
+export async function speechManifest(kind = "recognition") {
+  const selected = speechPack(kind);
+  for (const [name, version] of [["onnxruntime-web", selected.onnxRuntime], ["@huggingface/transformers", selected.transformers]]) {
     const metadata = JSON.parse(await readFile(join(packageRoot, "node_modules", name, "package.json"), "utf8"));
     if (metadata.version !== version) throw new Error("Speech runtime dependency pin mismatch");
   }
-  const assets = pack.files.filter(file => file.path !== "README.md").map(file => ({
-    ...file, path: `models/${pack.model}/${file.path}`,
-    downloadUrl: `https://huggingface.co/${pack.model}/resolve/${pack.revision}/${file.path}`,
+  const assets = selected.files.filter(file => file.path !== "README.md").map(file => ({
+    ...file, path: `models/${selected.model}/${file.path}`,
+    downloadUrl: `https://huggingface.co/${selected.model}/resolve/${selected.revision}/${file.path}`,
   }));
+  if (kind === "tts") {
+    const { path, bytes, sha256, downloadUrl } = selected.phonemizer;
+    assets.push({ path, bytes, sha256, downloadUrl });
+  }
   for (const file of runtimeFiles) {
     const bytes = await readFile(join(packageRoot, "node_modules/onnxruntime-web/dist", file.path));
     if (!validAsset(bytes, file)) throw new Error(`Speech runtime integrity failure: ${file.path}`);
-    assets.push({ ...file, path: `ort/${file.path}`, downloadUrl: `https://cdn.jsdelivr.net/npm/onnxruntime-web@${pack.onnxRuntime}/dist/${file.path}` });
+    assets.push({ ...file, path: `ort/${file.path}`, downloadUrl: `https://cdn.jsdelivr.net/npm/onnxruntime-web@${selected.onnxRuntime}/dist/${file.path}` });
   }
   return assets;
 }
 
-export async function copySpeechNotices(output) {
+export async function copySpeechNotices(output, kind = "recognition") {
+  speechPackKind(kind);
   await mkdir(join(output, "ort"), { recursive: true });
   await copyFile(join(packageRoot, "scripts/speech-licenses/ONNXRUNTIME-LICENSE"), join(output, "ort/LICENSE"));
   await copyFile(join(packageRoot, "node_modules/@huggingface/transformers/LICENSE"), join(output, "TRANSFORMERS-LICENSE"));
-  await copyFile(join(packageRoot, "scripts/speech-pack.json"), join(output, "speech-pack-provenance.json"));
+  await copyFile(join(packageRoot, kind === "tts" ? "scripts/tts-pack.json" : "scripts/speech-pack.json"), join(output, "speech-pack-provenance.json"));
+  if (kind === "tts") {
+    for (const name of ["PHONEMIZER-LICENSE", "KOKORO-JS-LICENSE", "ESPEAK-NG-COPYING", "TTS-NOTICE.txt"]) {
+      await copyFile(join(packageRoot, "scripts/speech-licenses", name), join(output, name));
+    }
+    await copyFile(join(packageRoot, "docs/tts-qualification.md"), join(output, "TTS-QUALIFICATION.md"));
+  }
 }
 
 const within = (root, path) => {

@@ -1,44 +1,62 @@
-import { copyFile, mkdir, readFile, writeFile, rename, rm } from "node:fs/promises";
+import { mkdir, readFile, writeFile, rename, rm } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { copySpeechNotices, externalOutput, pack, packageRoot, runtimeNames, speechManifest, validAsset } from "./speech-assets.mjs";
+import { copySpeechNotices, externalOutput, speechPack, packageRoot, speechManifest, validAsset } from "./speech-assets.mjs";
+import { speechPackKind } from "../src/browser/speech-pack-kind.ts";
 
 // Explicit operator action only; never invoked by build/install/package hooks.
 const { values } = parseArgs({ options: {
-  output: { type: "string" }, download: { type: "boolean", default: false }, "from-models": { type: "string" },
+  pack: { type: "string", default: "recognition" },
+  output: { type: "string" }, download: { type: "boolean", default: false },
+  "from-models": { type: "string" }, "from-pack": { type: "string" },
 } });
+const kind = speechPackKind(values.pack);
+const pack = speechPack(kind);
 const output = await externalOutput(values.output);
-const assets = await speechManifest();
+if (values["from-models"] && values["from-pack"]) throw new Error("Choose --from-models or --from-pack, not both");
+const fromPack = values["from-pack"] ? await externalOutput(values["from-pack"]) : undefined;
+const assets = await speechManifest(kind);
+const inventory = [...assets, ...pack.files.filter(file => file.path === "README.md").map(file => ({
+  ...file, path: `models/${pack.model}/${file.path}`,
+  downloadUrl: `https://huggingface.co/${pack.model}/resolve/${pack.revision}/${file.path}`,
+}))];
 async function verifiedFile(path, asset) {
   try { const bytes = await readFile(path); return validAsset(bytes, asset) ? bytes : undefined; }
   catch (error) { if (error.code !== "ENOENT") throw error; }
 }
-for (const asset of pack.files) {
-  const target = join(output, "models", pack.model, asset.path);
-  if (await verifiedFile(target, asset)) { console.log(`Verified existing ${asset.path}`); continue; }
-  let bytes = values["from-models"] ? await verifiedFile(join(resolve(values["from-models"]), pack.model, asset.path), asset) : undefined;
-  if (bytes) console.log(`Reusing verified ${asset.path}`);
+for (const asset of inventory) {
+  const label = asset.path.startsWith(`models/${pack.model}/`) ? asset.path.slice(`models/${pack.model}/`.length) : asset.path;
+  const target = join(output, asset.path);
+  if (await verifiedFile(target, asset)) { console.log(`Verified existing ${label}`); continue; }
+  const sourcePath = asset.path.startsWith("ort/") ? join(packageRoot, "node_modules/onnxruntime-web/dist", asset.path.slice(4))
+    : fromPack ? join(fromPack, asset.path)
+    : values["from-models"] && asset.path.startsWith("models/") ? join(resolve(values["from-models"]), asset.path.slice(7)) : undefined;
+  let bytes = sourcePath ? await verifiedFile(sourcePath, asset) : undefined;
+  if (bytes) console.log(`Reusing verified ${label}`);
   else {
-    if (!values.download) throw new Error(`Missing or invalid ${asset.path}; supply verified --from-models or explicitly opt in with --download`);
-    console.log(`Downloading pinned ${asset.path} (${asset.bytes} bytes)`);
-    const source = `https://huggingface.co/${pack.model}/resolve/${pack.revision}/${asset.path}`;
-    const response = await fetch(source, { signal: AbortSignal.timeout(180_000), credentials: "omit" });
-    if (!response.ok || !response.body) throw new Error(`Download failed: ${response.status} ${asset.path}`);
+    if (!values.download) throw new Error(`Missing or invalid ${label}; supply verified --from-pack/--from-models or explicitly opt in with --download`);
+    console.log(`Downloading pinned ${label} (${asset.bytes} bytes)`);
+    const response = await fetch(asset.downloadUrl, { signal: AbortSignal.timeout(180_000), credentials: "omit", referrerPolicy: "no-referrer" });
+    const final = new URL(response.url);
+    const knownHost = asset.path.startsWith("models/")
+      ? ["huggingface.co", "cdn-lfs.huggingface.co", "cdn-lfs.hf.co", "cdn-lfs-us-1.hf.co", "cas-bridge.xethub.hf.co", "us.aws.cdn.hf.co"].includes(final.hostname) || /^[a-z0-9-]+(?:\.[a-z0-9-]+)?\.cdn\.hf\.co$/.test(final.hostname)
+      : final.hostname === "cdn.jsdelivr.net";
+    if (final.protocol !== "https:" || final.username || final.password || final.port || !knownHost) throw new Error("Untrusted speech download final URL");
+    if (!response.ok || !response.body) throw new Error(`Download failed: ${response.status} ${label}`);
     bytes = Buffer.alloc(asset.bytes);
     let offset = 0;
     for await (const chunk of response.body) {
-      if (offset + chunk.length > asset.bytes) throw new Error(`Oversized download: ${asset.path}`);
+      if (offset + chunk.length > asset.bytes) throw new Error(`Oversized download: ${label}`);
       bytes.set(chunk, offset); offset += chunk.length;
     }
-    if (offset !== asset.bytes || !validAsset(bytes, asset)) throw new Error(`Integrity failure: ${asset.path}`);
+    if (offset !== asset.bytes || !validAsset(bytes, asset)) throw new Error(`Integrity failure: ${label}`);
   }
   await mkdir(dirname(target), { recursive: true });
-  const temporary = `${target}.partial`;
-  try { await writeFile(temporary, bytes); await rename(temporary, target); }
+  const temporary = `${target}.${randomUUID()}.partial`;
+  try { await writeFile(temporary, bytes, { flag: "wx", mode: 0o600 }); await rename(temporary, target); }
   finally { await rm(temporary, { force: true }); }
 }
-await mkdir(join(output, "ort"), { recursive: true });
-for (const name of runtimeNames) await copyFile(join(packageRoot, "node_modules/onnxruntime-web/dist", name), join(output, "ort", name));
-await copySpeechNotices(output);
+await copySpeechNotices(output, kind);
 await writeFile(join(output, "speech-assets.json"), `${JSON.stringify(assets, null, 2)}\n`);
-console.log(`Speech pack verified at ${output}\nExport it with npm run speech:export -- --input \"${output}\" --output <absolute-external-file.pivoice>, then copy the file to your phone and explicitly import it in Voice. No server route is needed.\nRetain this directory's provenance and license notices separately from the import file.\nLicense/release review remains required: ${pack.licenseNote}`);
+console.log(`${kind} speech pack verified at ${output}\nExport it with npm run speech:export -- --pack ${kind} --input "${output}" --output <absolute-external-file.pivoice>. No server route is needed.\nRetain this directory's provenance and license notices separately from the import file.\nLicense/release review remains required: ${pack.licenseNote}`);

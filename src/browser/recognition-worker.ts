@@ -1,6 +1,6 @@
 import { env, pipeline, type AutomaticSpeechRecognitionPipeline } from "@huggingface/transformers";
-import { cacheOnlySpeechFetch, prepareSpeechAssets, speechAssetUrls, type SpeechAsset, type SpeechPreparation } from "./recognition-assets.js";
-import { hasSpeechEnergy, MAX_PCM_SAMPLES, MAX_TRANSCRIPT_CHARACTERS } from "./recognition-pcm.js";
+import { cacheOnlySpeechFetch, prepareSpeechAssets, speechAssetUrls, type SpeechAsset, type SpeechPreparation } from "./speech-assets.js";
+import { hasSpeechEnergy, MAX_TRANSCRIPT_CHARACTERS } from "./recognition-pcm.js";
 
 // Build injects pinned model checksums plus hashes of the matching npm runtime assets.
 declare const __SPEECH_ASSETS__: SpeechAsset[];
@@ -66,7 +66,7 @@ scope.onmessage = ({ data }) => {
         scope.postMessage({ id, type: "ready" });
       } else if (data.type === "transcribe" && prepared && recognizer) {
         const pcm = data.pcm;
-        if (!(pcm instanceof Float32Array) || pcm.length > MAX_PCM_SAMPLES || !hasSpeechEnergy(pcm)) throw new Error("Invalid or silent speech input");
+        if (!(pcm instanceof Float32Array) || !hasSpeechEnergy(pcm)) throw new Error("Invalid or silent speech input");
         try {
           const result = await recognizer(pcm, { max_new_tokens: 128, return_timestamps: false, do_sample: false });
           if (Array.isArray(result)) throw new Error("Unexpected batched speech result");

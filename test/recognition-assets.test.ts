@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { cacheOnlySpeechFetch, prepareSpeechAssets, speechAssetUrls, verifiedAsset, type SpeechAssetCache } from "../src/browser/recognition-assets.ts";
+import { cacheOnlySpeechFetch, prepareSpeechAssets, speechAssetUrls, verifiedAsset, type SpeechAssetCache } from "../src/browser/speech-assets.ts";
 
 const bytes = new Uint8Array([1, 2, 3]);
 const asset = { path: "models/onnx-community/whisper-tiny.en/config.json", bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex"), downloadUrl: "https://huggingface.co/onnx-community/whisper-tiny.en/resolve/2575352d61be1bf7225cf8f8b268a4678025fc58/config.json" };

@@ -1,6 +1,32 @@
 # Validation and delivery record
 
-## Route-free acquisition revision (ADR 0001)
+## Current ADR 0002 integration checkpoint
+
+Runtime, audio/controller and UI replacement are implemented: pinned English Whisper recognition and Kokoro `af_heart` TTS run in browser workers; no OS/cloud/system/alternate-voice fallback remains. Separate acquisition/preparation, explicit enablement and Speak, exact selected-pack cache clearing, runtime handoff and persistent audio safety ownership are implemented. Full off/context/hide revokes authority; Stop releases TTS and requires reprepare. Capture tracks stop synchronously while asynchronous graph teardown remains owned, with a five-second deadline/unsafe latch.
+
+Parent verification on the integrated checkout (installed desktop Edge; fake media/host/model unless otherwise stated):
+
+| Check | Result / evidence boundary |
+| --- | --- |
+| `npm run verify` | **164 unit/contract + 16 deployment tests passed**, strict typecheck and build; deterministic/fake contract evidence |
+| `npm run test:browser` | **129 checks passed** using fake media/runtime/host; not model/device acceptance |
+| Build inventory | Approximately **4.75 MB uncompressed**, including two Transformers worker bundles, excluding external model/runtime packs; below 16 MiB |
+| `npm run test:runtime` | Three real pinned recognition ORT scenarios passed: cached, evicted and corrupt; not model inference |
+| `npm run test:tts-runtime` with explicit external phonemizer | Nine real pinned loader/capability scenarios passed **without weights**; cached initialization, corruption/eviction and denied fallback, not full-model inference |
+| `npm run test:tts-phonemizer` with explicit external phonemizer | Real pinned phonemizer/tokenizer regressions passed: intact numbers/abbreviations, chunking, unsupported-input rejection and upstream long-input truncation detection; no model audio or intelligibility acceptance |
+| Full-model TTS / Pixel / isolated-host acceptance | **UNRUN**; no model-performance, real audio or device privacy claims |
+
+Additional explicit checks are `VOICE_TTS_PHONEMIZER_FILE=/external/phonemizer.js node test/tts-runtime-browser.mjs` and `VOICE_TTS_PACK_FILE=/external/english-tts.pivoice node test/tts-model-browser.mjs` (use shell-appropriate environment syntax). The former uses actual phonemizer/ORT with a substituted model adapter; the latter requires a complete verified external pack and remains unrun. Neither discovers/downloads weights or calls an inference provider. An ORT fallback attempt in failure tests is denied; do not conflate blocked requests with zero attempted requests.
+
+The retired OS/network-voice fixture is removed from the integrated tree. Independent read-only audio/UI and corrected-text reviews found no further concrete defects; subsequent tests cover their noted notification, asynchronous TTS, cache, picker, BFCache and partial-playback gaps. One intermediate full unit run observed the existing service admission test report `unknown` instead of `running`; it did not reproduce in an isolated rerun, twelve consecutive full-unit reruns, or final verification. Assertion diagnostics were improved, but no root cause or fix is claimed for that transient observation.
+
+Native eSpeak corresponding-source/build provenance, combined-work GPL obligations and voice/model provenance block release/conveyance. `private: true` is not an exemption when sending code/assets to others. Full-model tests, independent safety/network review, owner-approved Pixel thresholds and separately authorized isolated-host/device acceptance remain gates. See [qualification](tts-qualification.md) and [ADR 0002](adr/0002-browser-model-tts.md). Conservative unsupported-text rejection is intentional: signed numbers/ranges, malformed numeric forms, numeric cores over 15 digits and phonemizer spans over 32 characters reject before audio. Decimal/grouped-number/time expressions and dotted abbreviations remain intact through phonemization. These bounds address observed upstream input truncation, not pronunciation qualification.
+
+## Historical evidence below
+
+The remaining records preserve prior checkpoints. Their OS-voice permissions, route requirements, package sizes, test counts and Realtime acceptance steps are **historical, not current instructions or Kokoro acceptance**. Current operation is described above and in deployment/security; no obsolete speech-provider setup or OS-voice validation is required by the new architecture.
+
+## Route-free acquisition revision (ADR 0001; superseded playback)
 
 The owner rejected the custom `/pi-voice-speech/` deployment requirement. [ADR 0001](adr/0001-browser-owned-speech-pack-acquisition.md) replaces it with browser-owned verified cache, explicit pinned public download and local portable-file import. The records below describe the earlier route-based implementation until superseded by the route-free verification results recorded here.
 
