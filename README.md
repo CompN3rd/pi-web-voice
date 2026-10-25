@@ -85,3 +85,18 @@ Do not activate the prototype in a live instance without a deliberate acceptance
 New server plugins require a session-daemon restart arranged outside its hosted sessions. **Restart interrupts active sessions and terminals.** No repository script performs this. Browser reload or Pi `/reload` alone does not activate a new server plugin.
 
 Use a separate data directory, daemon address and web port for isolated acceptance. No OpenAI audio API key or Realtime settings are needed. Text workers retain normal Pi authentication. Keep the package private until live-host, model-asset, Pixel, license and release-owner gates pass. `private: true` is not an exemption from licensing obligations when conveying code/assets to others. Reload the full page when replacing an older OS-synthesis build; do not hot-swap its audio controller.
+
+## Community discovery
+
+This package declares `piWeb.plugins` and the `pi-web.dev-plugin`, `pi-package`,
+and `pi-web-plugin` npm keywords required by the
+[PI WEB community directory](https://pi-web.dev/community-plugins). No separate
+registration or submission is needed. Discovery requires publishing a new public
+npm version containing this metadata; npm search indexing may take time. Source
+changes alone do not update the directory. The compatibility and installation
+requirements above still apply.
+
+These keywords only prepare future discovery. This prototype remains
+`private: true`; do not publish until the acceptance, licensing, and owner-release
+gates above pass. No Git repository remote is configured in this checkout; add
+its confirmed public repository URL to `package.json` before any public release.
