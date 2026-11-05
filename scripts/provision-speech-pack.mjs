@@ -3,19 +3,27 @@ import { randomUUID } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { copySpeechNotices, externalOutput, speechPack, packageRoot, speechManifest, validAsset } from "./speech-assets.mjs";
-import { speechPackKind } from "../src/browser/speech-pack-kind.ts";
+import { TTS_IMPORT_ONLY_REASON, speechPackKind } from "../src/browser/speech-pack-kind.ts";
+
+import { stageCandidate } from "./tts-source-distribution.mjs";
 
 // Explicit operator action only; never invoked by build/install/package hooks.
 const { values } = parseArgs({ options: {
   pack: { type: "string", default: "recognition" },
   output: { type: "string" }, download: { type: "boolean", default: false },
+  candidate: { type: "string" },
   "from-models": { type: "string" }, "from-pack": { type: "string" },
 } });
 const kind = speechPackKind(values.pack);
 const pack = speechPack(kind);
+if (kind === "tts" && values.download) throw new Error(TTS_IMPORT_ONLY_REASON);
 const output = await externalOutput(values.output);
 if (values["from-models"] && values["from-pack"]) throw new Error("Choose --from-models or --from-pack, not both");
 const fromPack = values["from-pack"] ? await externalOutput(values["from-pack"]) : undefined;
+if (kind === "tts") {
+  if (!values.candidate) throw new Error("TTS provisioning requires --candidate <verified source-built handoff directory>");
+  await stageCandidate(values.candidate, output);
+}
 const assets = await speechManifest(kind);
 const inventory = [...assets, ...pack.files.filter(file => file.path === "README.md").map(file => ({
   ...file, path: `models/${pack.model}/${file.path}`,
@@ -35,7 +43,7 @@ for (const asset of inventory) {
   let bytes = sourcePath ? await verifiedFile(sourcePath, asset) : undefined;
   if (bytes) console.log(`Reusing verified ${label}`);
   else {
-    if (!values.download) throw new Error(`Missing or invalid ${label}; supply verified --from-pack/--from-models or explicitly opt in with --download`);
+    if (!values.download) throw new Error(`Missing or invalid ${label}; supply verified --from-pack/--from-models${kind === "tts" ? "; TTS is import-only, no download is available" : " or explicitly opt in with --download"}`);
     console.log(`Downloading pinned ${label} (${asset.bytes} bytes)`);
     const response = await fetch(asset.downloadUrl, { signal: AbortSignal.timeout(180_000), credentials: "omit", referrerPolicy: "no-referrer" });
     const final = new URL(response.url);
@@ -59,4 +67,4 @@ for (const asset of inventory) {
 }
 await copySpeechNotices(output, kind);
 await writeFile(join(output, "speech-assets.json"), `${JSON.stringify(assets, null, 2)}\n`);
-console.log(`${kind} speech pack verified at ${output}\nExport it with npm run speech:export -- --pack ${kind} --input "${output}" --output <absolute-external-file.pivoice>. No server route is needed.\nRetain this directory's provenance and license notices separately from the import file.\nLicense/release review remains required: ${pack.licenseNote}`);
+console.log(`${kind} speech pack verified at ${output}\n${kind === "tts" ? "Assemble the pack with npm run tts:assemble -- --input <this-directory> --candidate <verified-build> --output <new-external-directory> --dependency-archives <external-cache>." : `Export it with npm run speech:export -- --input "${output}" --output <absolute-external-file.pivoice>.`} No server route is needed.\nRetain this directory's provenance and license notices separately from the import file.\nLicense/release review remains required: ${pack.licenseNote}`);

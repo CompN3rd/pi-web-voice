@@ -8,27 +8,27 @@ function withoutProperty(target: object, key: PropertyKey, action: () => void): 
   finally { if (descriptor) Object.defineProperty(target, key, descriptor); else Reflect.deleteProperty(target, key); }
 }
 
-test("tts-loader: requires Blob streams, pipeThrough, gzip decompression and async iteration before import", () => {
+test("tts-loader: source-built module needs WASM/blob URLs, not gzip streams", () => {
   assert.doesNotThrow(assertTtsLoaderCapabilities);
-  for (const [target, key] of [
-    [Blob.prototype, "stream"], [ReadableStream.prototype, "pipeThrough"],
-    [ReadableStream.prototype, Symbol.asyncIterator], [globalThis, "DecompressionStream"],
-  ] as const) withoutProperty(target, key, () => assert.throws(assertTtsLoaderCapabilities, /TTS prepare/));
-  const descriptor = Object.getOwnPropertyDescriptor(globalThis, "DecompressionStream")!;
-  try {
-    Object.defineProperty(globalThis, "DecompressionStream", { configurable: true, value: class {
-      constructor(format: string) { assert.equal(format, "gzip"); throw new Error("gzip unsupported"); }
-    } });
-    assert.throws(assertTtsLoaderCapabilities, /gzip unsupported/);
-  } finally { Object.defineProperty(globalThis, "DecompressionStream", descriptor); }
+  for (const [target, key] of [[globalThis, "Blob"], [globalThis, "WebAssembly"], [URL, "createObjectURL"]] as const)
+    withoutProperty(target, key, () => assert.throws(assertTtsLoaderCapabilities, /TTS prepare/));
+  for (const [target, key] of [[Blob.prototype, "stream"], [ReadableStream.prototype, "pipeThrough"],
+    [ReadableStream.prototype, Symbol.asyncIterator], [globalThis, "DecompressionStream"]] as const)
+    withoutProperty(target, key, () => assert.doesNotThrow(assertTtsLoaderCapabilities));
 });
 
 test("tts-loader: incapable browsers reject before cache access, acquisition or module import", async () => {
-  const descriptor = Object.getOwnPropertyDescriptor(globalThis, "DecompressionStream")!;
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, "WebAssembly")!;
   try {
-    Object.defineProperty(globalThis, "DecompressionStream", { value: undefined, configurable: true });
+    Object.defineProperty(globalThis, "WebAssembly", { value: undefined, configurable: true });
     await assert.rejects(loadTtsAssets(new URL("https://example.test/tts-cache/"), [], "unused",
       async () => { throw new Error("must not download"); }, () => { throw new Error("must not install fetch"); },
-      { source: "download" }, () => { throw new Error("must not begin acquisition"); }), /TTS prepare/);
-  } finally { Object.defineProperty(globalThis, "DecompressionStream", descriptor); }
+      { source: "cache" }, () => { throw new Error("must not begin acquisition"); }), /TTS prepare/);
+  } finally { Object.defineProperty(globalThis, "WebAssembly", descriptor); }
+});
+
+test("tts-loader: import-only download refusal precedes cache open and capability work", async () => {
+  await assert.rejects(loadTtsAssets(new URL("https://example.test/tts-cache/"), [], "unused",
+    async () => { throw new Error("must not download"); }, () => { throw new Error("must not install fetch"); },
+    { source: "download" }, () => { throw new Error("must not begin acquisition"); }), /TTS download unavailable/);
 });

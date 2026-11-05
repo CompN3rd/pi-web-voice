@@ -1,0 +1,122 @@
+{
+  "schema": 1,
+  "candidate": "espeak-ng-1.52.0-en-us-pi-1",
+  "combinedCandidateLicense": "GPL-3.0-or-later",
+  "productionIntegrated": false,
+  "qualification": "Standalone source-built candidate, not release or model/device acceptance",
+  "binary": {
+    "path": "phonemizer.mjs",
+    "bytes": 1491829,
+    "sha256": "055adbf200338f5cefff27e16e81d9a27b9f73a3e2482f59ebb721e6ca5ab78d"
+  },
+  "pins": {
+    "schema": 1,
+    "candidate": "espeak-ng-1.52.0-en-us-pi-1",
+    "nativeRevision": "4870adfa25b1a32b4361592f1be8a40337c58d6c",
+    "emscriptenVersion": "3.1.74",
+    "emscriptenRevision": "1092ec30a3fb1d46b1782ff1b4db5094d3d06ae5",
+    "toolchainBuild": "c2655005234810c7c42e02a18e4696554abe0352",
+    "nodeVersion": "22.16.0",
+    "inputs": [
+      {
+        "name": "espeak-ng.tar.gz",
+        "url": "https://codeload.github.com/espeak-ng/espeak-ng/tar.gz/4870adfa25b1a32b4361592f1be8a40337c58d6c",
+        "sha256": "cd83f84c4e495f281ac14e919aecf2834306ec1ea1b498de8ef6000f3a0f90de"
+      },
+      {
+        "name": "emscripten.tar.xz",
+        "url": "https://storage.googleapis.com/webassembly/emscripten-releases-builds/linux/c2655005234810c7c42e02a18e4696554abe0352/wasm-binaries.tar.xz",
+        "sha256": "a987bb4cded4f29437e8589accac204ce3c134feaaaf251bb97d0fdf450dce65"
+      },
+      {
+        "name": "node.tar.xz",
+        "url": "https://nodejs.org/dist/v22.16.0/node-v22.16.0-linux-x64.tar.xz",
+        "sha256": "f4cb75bb036f0d0eddf6b79d9596df1aaab9ddccd6a20bf489be5abe9467e84e"
+      }
+    ]
+  },
+  "patches": [],
+  "configuration": "builder/config.h and exact argv in build-record.json; forced wchar.h inclusion",
+  "builderInputs": {
+    "LICENSE": {
+      "bytes": 1065,
+      "sha256": "0436b86796daab923831764315e98dc5c22679db8d2228705c300a972b12e4af"
+    },
+    "README.md": {
+      "bytes": 5789,
+      "sha256": "bcc06d853cbe8152d3350a9af06ae683de5479cc69554a0787f760b25b8dd7e5"
+    },
+    "bridge.c": {
+      "bytes": 822,
+      "sha256": "4a02bd871ac0a505382b590818c60e65b180bc150d47e794aaafb399d821a035"
+    },
+    "build.py": {
+      "bytes": 12701,
+      "sha256": "73621da8aea235868042e57a1f6c1d882177eda9622014f1f06808ed0c851bc3"
+    },
+    "config.h": {
+      "bytes": 406,
+      "sha256": "cd9a434504ed68dd49557987057ef446ec636316556f40d54cda7be492334c9d"
+    },
+    "phonemizer.mjs": {
+      "bytes": 1376,
+      "sha256": "5417132857061bbd50e83ceb4ad6fb223a30bdd48864b48eb36fc04feaaddb0d"
+    },
+    "pins.json": {
+      "bytes": 1071,
+      "sha256": "a65daeaecc892c9202b82a1d6565fb60a53279254b1a6b7a4b5133953afc6c63"
+    },
+    "test_build.py": {
+      "bytes": 1199,
+      "sha256": "e169b2d93d339ee7ad5ee63b6c2482bf13f3f096abbfd1275113ddb7fbb4c811"
+    }
+  },
+  "data": {
+    "en_dict": {
+      "bytes": 168204,
+      "sha256": "1053f74a34af38abb6fbd64b7838dacbc655a687c48ce1bb663d364a127b05de"
+    },
+    "intonations": {
+      "bytes": 2312,
+      "sha256": "031a105bf6bb2ebcd73a2c579ccfb42469b27266db0078af65ae298fd3588b21"
+    },
+    "lang/gmw/en": {
+      "bytes": 140,
+      "sha256": "4605d5330801de3641c6e366d15f129ea1f5ffbce8722642aba01ace07ab9c83"
+    },
+    "lang/gmw/en-US": {
+      "bytes": 257,
+      "sha256": "41534c2a22df5dd4f1052ff9e1a33a3ea7bff5a26b5c02bdad5ba8ddb7524704"
+    },
+    "phondata": {
+      "bytes": 554740,
+      "sha256": "a0b643b155cb6b12628d9e7865b57d9fca0d35844614f2594a5e009c80c80bb4"
+    },
+    "phonindex": {
+      "bytes": 43316,
+      "sha256": "384e5fa6f714ba5356c58008249b78699c31c1ad044b243068d263fb806b7d73"
+    },
+    "phontab": {
+      "bytes": 58652,
+      "sha256": "1b40690667e1e9aa1ba5e5234773c799e7e72ea751426e5150423d53c3f24fa2"
+    }
+  },
+  "dataSources": {
+    "en_dict": "native dictsource/en_rules + en_list + en_emoji",
+    "phondata/phonindex/phontab/intonations": "native phsource tree compiled by same pinned WASM eSpeak CLI",
+    "lang/gmw/en, lang/gmw/en-US": "unchanged native espeak-ng-data/lang/gmw files"
+  },
+  "runtimeSources": "emscripten-runtime/src and system from hash-verified toolchain archive",
+  "nativeSource": "inputs/espeak-ng.tar.gz (complete unmodified tree, including all in-tree licenses/attribution)",
+  "scope": "Engine candidate only; not the full Pi Web Voice combined-work source distribution",
+  "sourceArchive": {
+    "path": "source.tar.gz",
+    "bytes": 23180087,
+    "sha256": "59ac8d7747f40a961c817c1c047383a43a029b2028dae150f2cd481b7edc7595"
+  },
+  "notices": {
+    "path": "NOTICES.txt",
+    "bytes": 119290,
+    "sha256": "9510ab28004ff6d7bd27116318e51f41e3f70dab3cb7bbec83e59fbe372ab00f"
+  }
+}

@@ -140,9 +140,10 @@ try {
   };
   const ttsFixturePack = { ...fixturePack, buffer: Buffer.from("PIVOTTS1") };
   await reset();
-  await button("Download pinned TTS pack").click();
-  await page.waitForFunction(() => document.querySelector("compn3rd-voice-panel").speech?.ready);
-  assert.deepEqual(await page.evaluate(() => fixture.stats.ttsAcquisitions), [{ source: "download" }]);
+  assert.equal(await button("Download pinned TTS pack").isDisabled(), true);
+  assert.equal(await page.getByText(/TTS download unavailable: the source-built/).isVisible(), true);
+  assert.deepEqual(await page.evaluate(() => fixture.stats.ttsAcquisitions), []);
+  assert.match(await page.evaluate(async () => { try { await document.querySelector("compn3rd-voice-panel").prepareTts({ source: "download" }); } catch (error) { return error.message; } }), /TTS download unavailable/);
   assert.equal(await page.evaluate(() => fixture.stats.captures + fixture.stats.audioContexts + fixture.stats.instructions), 0); checks++;
   await reset();
   const hiddenTtsPicker = await chooseTtsPack();

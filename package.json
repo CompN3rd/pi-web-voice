@@ -10,11 +10,16 @@
   },
   "files": [
     "dist/*.js",
+    "dist/THIRD_PARTY_NOTICES.txt",
+    "THIRD_PARTY.md",
     "dist/browser/*.js",
     "dist/browser/speech/ort/LICENSE",
+    "dist/browser/speech/ort/ThirdPartyNotices.txt",
     "dist/browser/speech/TRANSFORMERS-LICENSE",
+    "dist/browser/speech/WHISPER-LICENSE",
     "dist/browser/speech/speech-pack-provenance.json",
     "dist/browser/tts/ort/LICENSE",
+    "dist/browser/tts/ort/ThirdPartyNotices.txt",
     "dist/browser/tts/TRANSFORMERS-LICENSE",
     "dist/browser/tts/PHONEMIZER-LICENSE",
     "dist/browser/tts/KOKORO-JS-LICENSE",
@@ -24,7 +29,8 @@
     "dist/browser/tts/speech-pack-provenance.json",
     "README.md",
     "docs",
-    "LICENSE"
+    "LICENSE",
+    "dist/browser/tts/PHONEMIZER-SOURCE.json"
   ],
   "keywords": [
     "pi-package",
@@ -63,8 +69,9 @@
     "test:tts-phonemizer": "node test/tts-phonemizer-browser.mjs",
     "test:tts-model": "node test/tts-model-browser.mjs",
     "check:package": "node scripts/check-package-size.mjs",
-    "test:assets": "node --test test/speech-deployment.test.mjs test/release.test.mjs",
-    "test:model": "npm run build && node test/recognition-model-browser.mjs"
+    "test:assets": "node --test test/speech-deployment.test.mjs test/release.test.mjs test/bundle-notices.test.mjs test/phonemizer-build.test.mjs test/tts-source-distribution.test.mjs",
+    "test:model": "npm run build && node test/recognition-model-browser.mjs",
+    "tts:assemble": "node scripts/tts-source-distribution.mjs"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",

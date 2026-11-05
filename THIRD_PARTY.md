@@ -1,0 +1,27 @@
+# Third-party licensing and notices
+
+The root MIT license covers original Pi Web Voice contributions. It does **not** relicense third-party code, tokenizer fixtures, model weights, voices, or runtime components. Package privacy and public-source availability are not exemptions from third-party obligations.
+
+## Public source tree
+
+- `test/fixtures/tts/tokenizer.json` and `tokenizer_config.json` are unmodified bytes from `onnx-community/Kokoro-82M-v1.0-ONNX`, revision `1939ad2a8e416c0acfeecc08a694d14ef25f2231`. The pinned [model card](https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/blob/1939ad2a8e416c0acfeecc08a694d14ef25f2231/README.md) declares Apache-2.0. Full Apache-2.0 text is retained in `scripts/speech-licenses/KOKORO-JS-LICENSE`; this is a license-text location, not a claim that the tokenizer comes from the JavaScript package. Fixture hashes and sizes are in `scripts/tts-pack.json`. No model weights or voice binary are present in these fixtures.
+- The Kokoro adapter/text implementation references `kokoro-js@1.2.1` and the model's documented tensor/phoneme contract. Project modifications enforce verified assets, bounded input/output and conservative no-loss preflight rather than the upstream download, caching or truncation helpers. Upstream Apache-2.0 text is in `scripts/speech-licenses/KOKORO-JS-LICENSE`; attribution and external-component caveats are in `scripts/speech-licenses/TTS-NOTICE.txt`.
+- The eSpeak GPL text is included as a notice, **not an eSpeak implementation or a corresponding-source offer**. Including that text does not relicense this repository wholesale or establish the licensing of a future combined distribution.
+
+## Generated plugin package
+
+`dist/THIRD_PARTY_NOTICES.txt` validates actual esbuild input installations (including nested package paths) and retains the complete reviewed inventory even during a partial speech build, so retained UI/server bundles never lose their notices. It includes the complete license text for each reviewed package: Lit and its BSD-3-Clause components; Apache-2.0 Transformers.js; MIT ONNX Runtime JavaScript; and the MIT public Pi Web helpers. The build fails on an unreviewed package or changed package version/license. This is a bundled-code notice inventory, not a complete SBOM or legal clearance.
+
+ONNX Runtime's complete upstream `ThirdPartyNotices.txt` from commit `89f8206ba4f1c22c39e0297fb55272e8ce8cd7d0` is retained verbatim in `scripts/speech-licenses/ONNXRUNTIME-ThirdPartyNotices.txt` and copied to each generated speech pack's `ort/ThirdPartyNotices.txt`. SHA-256: `e9e90971a8e75a9a8ac0c6412e29c1202d079998389915aa485f46c816c3b4cc` (326,866 bytes). Retaining the full upstream notice is conservative; it does not claim that every listed component is linked into this WASM build.
+
+## External speech assets: still not cleared for redistribution
+
+OpenAI's upstream Whisper MIT text is retained in `scripts/speech-licenses/WHISPER-LICENSE` and copied into recognition-pack notices. Its source revision and the separate converted/Hugging Face license-label evidence are recorded in `docs/licensing-audit.md`.
+
+The approximately 65 MB recognition and 116 MB TTS packs are not included in the plugin tarball. They have their own model cards, runtime licenses and provenance. The binary `.pivoice` container does not embed its adjacent notice directory; distributing it alone is **not** an approved release format.
+
+The retired published phonemizer contained generated eSpeak engine/data despite its wrapper's Apache-2.0 metadata. Production now pins the traced source-built replacement. Complete combined-source/dependency native-source obligations remain unresolved. Do not redistribute a TTS pack based on a wrapper label or treat download-from-upstream as legal clearance. See `docs/licensing-audit.md`, `docs/tts-qualification.md` and `docs/releasing.md`.
+
+A separate source-built eSpeak NG 1.52.0 candidate now has an engine-only native/wrapper/data/build source distribution and real browser evidence; see [candidate provenance](docs/phonemizer-candidate.md) and `scripts/phonemizer/README.md`. Original bridge/tooling remains MIT, while the linked candidate is GPL-3.0-or-later with retained native and embedded-runtime notices. The replacement is not the published `phonemizer@1.2.1` binary. It is now pinned for import-only production acquisition, but no live deployment has occurred. Source-aware assembly includes the exact application snapshot and pinned dependency package archives with explicit completeness gaps. An engine source archive alone does not fulfill all obligations for the full combined application; worker isolation is not a GPL exemption.
+
+A model publisher's license and training-data claims are evidence to retain, not an independently verified chain of rights. Preserve all supplied notices and attribution, including upstream training-data acknowledgements, during any future qualified pack packaging. No current notice authorizes publication or waives the release-owner review.

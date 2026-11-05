@@ -4,14 +4,9 @@ import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { build } from "esbuild";
 import { chromium } from "playwright-core";
-import { externalPath, speechManifest, validAsset } from "../scripts/speech-assets.mjs";
+import { ttsPhonemizerInput } from "./tts-phonemizer-input.mjs";
 
-// Explicit local audited input only; never acquire weights or software here.
-const filename = process.env.VOICE_TTS_PHONEMIZER_FILE;
-if (!filename) throw Error("Set VOICE_TTS_PHONEMIZER_FILE to external phonemizer@1.2.1/dist/phonemizer.js; no downloads.");
-const phonemizer = await readFile(await externalPath(filename));
-const asset = (await speechManifest("tts")).find(asset => asset.path === "phonemizer/phonemizer.js");
-assert.ok(asset && validAsset(phonemizer, asset), "pinned phonemizer integrity");
+const { bytes: phonemizer, candidate } = await ttsPhonemizerInput();
 const inventory = JSON.parse(await readFile(new URL("../scripts/tts-pack.json", import.meta.url), "utf8"));
 const parts = [];
 for (const name of ["tokenizer.json", "tokenizer_config.json"]) {
@@ -49,9 +44,28 @@ try {
   });
   const page = await context.newPage();
   await page.goto(origin);
-  const result = await page.evaluate(async parts => {
+  const result = await page.evaluate(async ({ parts, candidate }) => {
     const { PreTrainedTokenizer, encodeTtsText, normalizeTtsText, planTtsText } = await import("/fidelity.js");
+    let deniedTransports = 0;
+    for (const name of ["fetch", "XMLHttpRequest", "WebSocket", "Worker", "SharedWorker", "EventSource", "WebTransport"])
+      globalThis[name] = function() { deniedTransports++; throw Error("phonemizer transport forbidden"); };
     const { phonemize } = await import("/phonemizer.js");
+    if (candidate) {
+      const expected = ["həlˈoʊ wˈɜːld", "θɹˈiː pɔɪnt wˈʌn fˈɔːɹ", "jˌuːˈɛs"];
+      // Independent source-built CLI reference, also repeated concurrently to
+      // exercise initialization and ownership of the native input cursor.
+      const inputs = ["Hello world.", "3.14", "U.S."];
+      const results = await Promise.all([...inputs, ...inputs].map(text => phonemize(text, "en-us")));
+      if (JSON.stringify(results.map(parts => parts.join(" "))) !== JSON.stringify([...expected, ...expected])) throw Error("candidate CLI reference mismatch");
+      const clauses = await phonemize("Good morning! Ready?", "en-us");
+      if (JSON.stringify(clauses) !== JSON.stringify(["ɡˈʊd mˈɔːɹnɪŋ", "ɹˈɛdi"])) throw Error("candidate clause loss");
+      if ((await phonemize(" ", "en-us")).length !== 0) throw Error("empty input");
+      for (const [text, language] of [["hello", "fr"], ["a\u0000b", "en-us"], ["x".repeat(1001), "en-us"]]) {
+        let rejected = false;
+        try { await phonemize(text, language); } catch { rejected = true; }
+        if (!rejected) throw Error("candidate boundary accepted invalid input");
+      }
+    }
     const tokenizer = new PreTrainedTokenizer(...parts);
     const ipa = text => text.replace(/r/g, "ɹ").replace(/ʲ/g, "j").replace(/x/g, "k").replace(/ɬ/g, "l");
     const check = (condition, message) => { if (!condition) throw Error(message); };
@@ -97,8 +111,8 @@ try {
     for (const char of ["1", "x"]) {
       const short = (await phonemize(char.repeat(100), "en-us")).join(" ");
       const long = (await phonemize(char.repeat(511), "en-us")).join(" ");
-      check(short === long, "pinned truncation premise changed");
-      truncation.push({ char, inputLengths: [100, 511], identicalOutputLength: long.length });
+      check(short === long, "pinned native truncation premise changed");
+      truncation.push({ char, inputLengths: [100, 511], identical: short === long, outputLengths: [short.length, long.length] });
     }
     // Actual pinned eSpeak proves why normalizing signed/range input is unsafe.
     check((await phonemize("-3", "en-us")).join("") !== (await phonemize("—3", "en-us")).join(""), "signed-number qualification premise");
@@ -108,10 +122,11 @@ try {
     let rejected = false;
     try { await encodeTtsText("Hello", async () => ["həlˈoʊ☃"], tokenizer); } catch { rejected = true; }
     check(rejected, "unsupported phoneme discarded");
-    return { evidence, rejects, proseChunks: chunks.length, longChunks: longChunks.length, oversizedRejected, truncation };
-  }, parts);
+    check(deniedTransports === 0, "phonemizer attempted transport");
+    return { evidence, rejects, proseChunks: chunks.length, longChunks: longChunks.length, oversizedRejected, truncation, deniedTransports };
+  }, { parts, candidate });
   assert.deepEqual(unexpected, []);
   assert.equal(requests.length, 3, "only the in-memory document and two verified/local modules were requested");
-  console.log(`PASS actual pinned phonemizer + tokenizer fidelity (${browser.version()}): ${JSON.stringify(result)}`);
+  console.log(`PASS actual pinned ${candidate ? "source-built candidate" : "published phonemizer"} + tokenizer fidelity (${browser.version()}): ${JSON.stringify(result)}`);
   console.log("No weights, audio, downloads, external requests or pronunciation acceptance.");
 } finally { await browser.close(); }

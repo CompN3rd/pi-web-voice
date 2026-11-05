@@ -1,17 +1,17 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { externalPath, speechManifest, validAsset } from "../scripts/speech-assets.mjs";
+import { speechManifest, validAsset } from "../scripts/speech-assets.mjs";
+import { ttsPhonemizerInput } from "./tts-phonemizer-input.mjs";
 import { ttsBrowserHarness } from "./tts-runtime-browser-support.mjs";
 
-// Explicit, externally supplied published phonemizer file only. No scanning,
-// package installation, model weights, network provisioning or inference API.
-const filename = process.env.VOICE_TTS_PHONEMIZER_FILE;
-if (!filename) throw new Error("Set VOICE_TTS_PHONEMIZER_FILE to an external verified phonemizer@1.2.1/dist/phonemizer.js; no default downloads.");
+// The candidate is test-only import/cache input with NO download URL. Neither
+// compiled production inventory nor distribution policy is changed by this test.
+const phonemizer = await ttsPhonemizerInput();
 const manifest = await speechManifest("tts");
-const assets = manifest.filter(asset => asset.path.startsWith("phonemizer/") || asset.path.startsWith("ort/"));
+const assets = [phonemizer.asset, ...manifest.filter(asset => asset.path.startsWith("ort/"))];
 const parts = [Buffer.from("PIVOTTS1")];
 for (const asset of assets) {
-  const bytes = await readFile(asset.path.startsWith("phonemizer/") ? await externalPath(filename) : `node_modules/onnxruntime-web/dist/${asset.path.slice(4)}`);
+  const bytes = asset.path.startsWith("phonemizer/") ? phonemizer.bytes : await readFile(`node_modules/onnxruntime-web/dist/${asset.path.slice(4)}`);
   assert.ok(validAsset(bytes, asset), `Pinned integrity: ${asset.path}`); parts.push(bytes);
 }
 const modelAdapter = `
@@ -33,7 +33,7 @@ const modelAdapter = `
 `;
 const harness = await ttsBrowserHarness({ assets, cache: "pi-voice-tts-loader-test", modelAdapter });
 try {
-  for (const scenario of ["cached", "phonemizer-evicted", "phonemizer-corrupt", "wasm-evicted", "wasm-corrupt", "no-decompression", "no-blob-stream", "no-pipe-through", "no-async-iteration"]) {
+  for (const scenario of ["cached", "phonemizer-evicted", "phonemizer-corrupt", "wasm-evicted", "wasm-corrupt", "no-decompression", "no-blob-stream", "no-pipe-through", "no-async-iteration", "no-webassembly"]) {
     const { context, page, unexpected } = await harness.context(Buffer.concat(parts));
     try {
       const prepare = source => page.evaluate(({ scenario, source }) => new Promise((resolve, reject) => {
@@ -48,14 +48,14 @@ try {
       const missing = await prepare("cache");
       assert.equal(missing.type, "error"); assert.equal(missing.code, "prepare"); assert.equal(missing.stats.prepared, false);
       const result = await prepare("import");
-      const unsupported = scenario.startsWith("no-");
+      const unsupported = scenario === "no-webassembly";
       assert.equal(result.stats.prepared, !unsupported);
       assert.equal(result.stats.nativeFetch, 0); assert.equal(result.stats.nativeXhr, 0); assert.equal(result.stats.unexpectedFetch, 0);
       assert.deepEqual(unexpected, []);
       if (unsupported) {
         assert.equal(result.type, "error"); assert.equal(result.code, "prepare");
         assert.equal(result.stats.phonemizerCalls, 0); assert.equal(result.stats.ortInit, null); assert.equal(result.stats.guardedTransports, 0);
-      } else if (scenario === "cached") {
+      } else if (scenario === "cached" || scenario.startsWith("no-")) {
         assert.equal(result.type, "ready", JSON.stringify(result));
         assert.equal(result.stats.phonemizerCalls, 1); assert.equal(result.stats.ortInit, 0); assert.equal(result.stats.guardedTransports, 0);
         const reused = await prepare("cache"); assert.equal(reused.type, "ready"); assert.equal(reused.stats.nativeFetch, 0);
@@ -78,7 +78,7 @@ try {
         if (scenario.startsWith("phonemizer")) { assert.equal(result.stats.phonemizerCalls, 0); assert.equal(result.stats.guardedTransports, 0); }
         else assert.equal(result.stats.guardedTransports, 1, "actual pinned ORT attempted its XHR fallback, which the guard refused");
       }
-      console.log(`PASS actual pinned TTS loader ${scenario}: ${JSON.stringify(result.stats)}`);
+      console.log(`PASS actual pinned TTS loader (${phonemizer.candidate ? "source-built candidate" : "published"}) ${scenario}: ${JSON.stringify(result.stats)}`);
     } finally { await context.close(); }
   }
   assert.ok(!harness.requests.some(path => path.includes("tts-cache")), "no model/runtime host route");

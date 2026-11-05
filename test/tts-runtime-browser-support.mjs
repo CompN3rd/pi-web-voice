@@ -53,6 +53,7 @@ export async function ttsBrowserHarness({ assets, cache, modelAdapter }) {
       if (message.type === "progress" && message.progress?.phase === "initializing") stats.prepared = true;
       post({ ...message, stats }, transfer);
     };
+    if (self.name === "no-webassembly") globalThis.WebAssembly = undefined;
     if (self.name === "no-decompression") globalThis.DecompressionStream = undefined;
     if (self.name === "no-blob-stream") Blob.prototype.stream = undefined;
     if (self.name === "no-pipe-through") ReadableStream.prototype.pipeThrough = undefined;

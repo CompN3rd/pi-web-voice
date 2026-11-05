@@ -1,5 +1,6 @@
 import { cacheOnlySpeechFetch, prepareSpeechAssets, speechAssetUrls, type SpeechAsset, type SpeechPreparation } from "./speech-assets.js";
 import type { TtsProgress } from "./tts-contract.js";
+import { TTS_IMPORT_ONLY_REASON } from "./speech-pack-kind.js";
 import type { EnglishPhonemizer } from "./tts-text.js";
 
 export interface TtsLoader {
@@ -10,19 +11,10 @@ export interface TtsLoader {
   dispose(): void;
 }
 
-/** The pinned phonemizer starts asynchronous gzip decompression at evaluation.
- * Reject missing capabilities before import; its internal startup promise can
- * otherwise hang instead of propagating a decompression capability error.
- */
+/** The source-built module embeds WASM/data and needs no gzip streams. */
 export function assertTtsLoaderCapabilities(): void {
-  if (typeof Blob !== "function" || typeof Blob.prototype.stream !== "function"
-    || typeof ReadableStream !== "function" || typeof ReadableStream.prototype.pipeThrough !== "function"
-    || typeof DecompressionStream !== "function") throw new Error("TTS prepare");
-  const source = new Blob().stream();
-  const decompressor = new DecompressionStream("gzip");
-  for (const stream of [source, decompressor.readable]) {
-    if (typeof (stream as unknown as { [Symbol.asyncIterator]?: unknown })[Symbol.asyncIterator] !== "function") throw new Error("TTS prepare");
-  }
+  if (typeof Blob !== "function" || typeof URL.createObjectURL !== "function"
+    || typeof WebAssembly !== "object") throw new Error("TTS prepare");
 }
 
 /** Only verified cache bytes become executable blob modules. Call exclusively
@@ -30,6 +22,7 @@ export function assertTtsLoaderCapabilities(): void {
  */
 export async function loadTtsAssets(base: URL, assets: SpeechAsset[], cacheName: string, download: typeof fetch,
   installFetch: (fetcher: typeof fetch) => void, options: SpeechPreparation, progress: (value: TtsProgress) => void): Promise<TtsLoader> {
+  if (options.source === "download") throw new Error(TTS_IMPORT_ONLY_REASON);
   assertTtsLoaderCapabilities();
   const urls = speechAssetUrls(base, assets, "tts");
   const totalBytes = assets.reduce((sum, asset) => sum + asset.bytes, 0);

@@ -39,19 +39,26 @@ export async function speechManifest(kind = "recognition") {
     if (!validAsset(bytes, file)) throw new Error(`Speech runtime integrity failure: ${file.path}`);
     assets.push({ ...file, path: `ort/${file.path}`, downloadUrl: `https://cdn.jsdelivr.net/npm/onnxruntime-web@${selected.onnxRuntime}/dist/${file.path}` });
   }
-  return assets;
+  // The entire TTS pack is import-only, not a partial download followed by failure.
+  return kind === "tts" ? assets.map(({ downloadUrl, ...asset }) => asset) : assets;
 }
 
 export async function copySpeechNotices(output, kind = "recognition") {
   speechPackKind(kind);
   await mkdir(join(output, "ort"), { recursive: true });
   await copyFile(join(packageRoot, "scripts/speech-licenses/ONNXRUNTIME-LICENSE"), join(output, "ort/LICENSE"));
+  await copyFile(join(packageRoot, "scripts/speech-licenses/ONNXRUNTIME-ThirdPartyNotices.txt"), join(output, "ort/ThirdPartyNotices.txt"));
   await copyFile(join(packageRoot, "node_modules/@huggingface/transformers/LICENSE"), join(output, "TRANSFORMERS-LICENSE"));
   await copyFile(join(packageRoot, kind === "tts" ? "scripts/tts-pack.json" : "scripts/speech-pack.json"), join(output, "speech-pack-provenance.json"));
+  if (kind === "recognition") {
+    await copyFile(join(packageRoot, "scripts/speech-licenses/WHISPER-LICENSE"), join(output, "WHISPER-LICENSE"));
+  }
   if (kind === "tts") {
-    for (const name of ["PHONEMIZER-LICENSE", "KOKORO-JS-LICENSE", "ESPEAK-NG-COPYING", "TTS-NOTICE.txt"]) {
+    for (const name of ["KOKORO-JS-LICENSE", "ESPEAK-NG-COPYING", "TTS-NOTICE.txt"]) {
       await copyFile(join(packageRoot, "scripts/speech-licenses", name), join(output, name));
     }
+    await copyFile(join(packageRoot, "scripts/phonemizer/LICENSE"), join(output, "PHONEMIZER-LICENSE"));
+    await copyFile(join(packageRoot, "scripts/phonemizer/candidate.json"), join(output, "PHONEMIZER-SOURCE.json"));
     await copyFile(join(packageRoot, "docs/tts-qualification.md"), join(output, "TTS-QUALIFICATION.md"));
   }
 }

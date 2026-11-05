@@ -59,6 +59,7 @@ export async function exportSpeechPack(input, output, assets = undefined, kind =
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   const { values } = parseArgs({ options: { input: { type: "string" }, output: { type: "string" }, pack: { type: "string", default: "recognition" } } });
   const kind = speechPackKind(values.pack);
+  if (kind === "tts") throw new Error("TTS export requires source-aware assembly: npm run tts:assemble -- --input <pack-directory> --candidate <verified-build> --output <new-external-directory> --dependency-archives <external-cache>");
   const pack = speechPack(kind);
   const bytes = await exportSpeechPack(values.input, values.output, undefined, kind);
   console.log(`Exported verified speech pack: ${values.output} (${bytes} bytes).\nThis .pivoice file is for the ${kind} pack only; it cannot be imported as the other pack kind. No server route is needed.\nKeep the source pack's provenance and license notices separately; the import contains only pinned asset bytes.\nLicense/release review remains required: ${pack.licenseNote}`);

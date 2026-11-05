@@ -15,26 +15,25 @@ Kokoro JavaScript adapter references:
   for verified assets, bounded input/output, and no-loss preflight.
   See KOKORO-JS-LICENSE and source-file attribution.
 
-Phonemizer wrapper:
-  phonemizer 1.2.1, xenova/phonemizer.js
-  wrapper revision 6835144b7ee9043129222549c1ed2f6a27216278
-  Published wrapper/package license: Apache-2.0 (PHONEMIZER-LICENSE).
-
-Embedded eSpeak-derived engine/data:
-  eSpeak NG, GPL-3.0-or-later; see ESPEAK-NG-COPYING.
-  The wrapper's Apache label is NOT a license declaration for every
-  embedded engine/data component. The native engine's exact source,
-  patches, toolchain and corresponding-source package are unverified.
-  Candidate upstream reference (NOT verified build correspondence):
-  https://github.com/espeak-ng/espeak-ng/tree/0dfd1d77dd7f96ef1ea6856c9fa5cfac01599582/emscripten
-  GPL text copied from that revision's COPYING (SHA-256):
-  8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903
+Source-built phonemizer wrapper/engine:
+  eSpeak NG 1.52.0, native revision 4870adfa25b1a32b4361592f1be8a40337c58d6c.
+  Original Pi Web Voice bridge/wrapper: MIT (PHONEMIZER-LICENSE).
+  Linked engine/data: GPL-3.0-or-later (ESPEAK-NG-COPYING).
+  Emscripten 3.1.74; exact toolchain/source mapping in PHONEMIZER-SOURCE.json.
+  This is NOT phonemizer@1.2.1 or its Apache-labelled generated binary.
+  Retain phonemizer-source/source.tar.gz, NOTICES.txt and SOURCE.json with
+  source-aware distribution assembly. They include the complete native tree,
+  wrapper/data/build inputs, embedded-runtime source and component notices.
+  The engine-only source archive is not complete combined-application source.
+  Distribution assembly includes the exact application snapshot and pinned
+  dependency package archives, with explicit preferred/native-source review
+  gaps. Worker isolation is not a GPL exemption.
 
 Transformers.js and ONNX Runtime:
   Retain TRANSFORMERS-LICENSE and ort/LICENSE respectively. Versions and
   runtime hashes are in speech-pack-provenance.json.
 
-RELEASE/CONVEYANCE BLOCKED pending corresponding-source, combined-work
+RELEASE/CONVEYANCE BLOCKED pending complete combined-source delivery, combined-work
 license obligations, voice provenance and owner review. Private:true is
 not an exemption when executable code/assets are sent to other people.
 This notice is not a source offer or legal clearance. Do not invent a

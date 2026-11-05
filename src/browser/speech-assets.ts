@@ -1,4 +1,4 @@
-import { SPEECH_PACKS, speechPackKind, type SpeechPackKind } from "./speech-pack-kind.js";
+import { TTS_IMPORT_ONLY_REASON, SPEECH_PACKS, speechPackKind, type SpeechPackKind } from "./speech-pack-kind.js";
 
 export type SpeechPreparation = { source: "cache" } | { source: "download" } | { source: "import"; file: Blob };
 export interface SpeechAsset { path: string; bytes: number; sha256: string; downloadUrl?: string; }
@@ -7,7 +7,6 @@ const models = {
   recognition: { prefix: "models/onnx-community/whisper-tiny.en/", distribution: "https://huggingface.co/onnx-community/whisper-tiny.en/resolve/2575352d61be1bf7225cf8f8b268a4678025fc58/" },
   tts: { prefix: "models/onnx-community/Kokoro-82M-v1.0-ONNX/", distribution: "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/1939ad2a8e416c0acfeecc08a694d14ef25f2231/" },
 };
-const phonemizerDistribution = "https://cdn.jsdelivr.net/npm/phonemizer@1.2.1/dist/phonemizer.js";
 export type SpeechAssetUrls = ReadonlyMap<string, SpeechAsset> & { readonly kind: SpeechPackKind };
 const runtimeDistribution = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0-dev.20250409-89f8206ba4/dist/";
 const modelDownloadHosts = new Set(["huggingface.co", "cdn-lfs.huggingface.co", "cdn-lfs.hf.co", "cdn-lfs-us-1.hf.co", "cas-bridge.xethub.hf.co", "us.aws.cdn.hf.co"]);
@@ -16,7 +15,7 @@ function distributionUrl(asset: SpeechAsset, kind: SpeechPackKind): string {
   const model = models[kind];
   const expected = asset.path.startsWith(model.prefix) ? model.distribution + asset.path.slice(model.prefix.length)
     : asset.path.startsWith("ort/") ? runtimeDistribution + asset.path.slice(4)
-    : kind === "tts" && asset.path === "phonemizer/phonemizer.js" ? phonemizerDistribution : undefined;
+    : undefined;
   if (!expected || asset.downloadUrl !== expected) throw new Error("Speech download URL is not a fixed distribution URL");
   return expected;
 }
@@ -82,6 +81,7 @@ export async function prepareSpeechAssets(urls: SpeechAssetUrls, cache: SpeechAs
   let checked = 0;
   const total = [...urls.values()].reduce((sum, asset) => sum + asset.bytes, 0);
   const magic = SPEECH_PACKS[speechPackKind(urls.kind)].magic;
+  if (options.source === "download" && urls.kind === "tts") throw new Error(TTS_IMPORT_ONLY_REASON);
   if (options.source === "download") for (const asset of urls.values()) distributionUrl(asset, urls.kind);
   if (options.source === "import") {
     if (!(options.file instanceof Blob) || options.file.size !== total + 8) throw new Error("Speech import has incorrect total size");

@@ -12,8 +12,6 @@ const paths = [model + "onnx/model_quantized.onnx", model + "voices/af_heart.bin
 const bytes = [new Uint8Array([1, 2, 3]), new Uint8Array([4, 5]), new Uint8Array([6, 7, 8, 9])];
 const assets: SpeechAsset[] = paths.map((path, i) => ({ path, bytes: bytes[i].length,
   sha256: createHash("sha256").update(bytes[i]).digest("hex"),
-  downloadUrl: path.startsWith(model) ? `https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/${revision}/${path.slice(model.length)}`
-    : "https://cdn.jsdelivr.net/npm/phonemizer@1.2.1/dist/phonemizer.js",
 }));
 const noDownload: typeof fetch = async () => assert.fail("Unexpected distribution request");
 function fixture() {
@@ -25,11 +23,6 @@ function fixture() {
   return { entries, cache, urls: speechAssetUrls(base, assets, "tts") };
 }
 function pack(payload = bytes, magic = "PIVOTTS1") { return new Blob([magic, ...payload]); }
-function downloaded(body: Uint8Array, url: string) {
-  const response = new Response(body as Uint8Array<ArrayBuffer>);
-  Object.defineProperty(response, "url", { value: url });
-  return response;
-}
 
 test("TTS descriptors are separate, bounded and reject untrusted paths and pack kinds", () => {
   const urls = speechAssetUrls(base, assets, "tts");
@@ -82,32 +75,15 @@ test("TTS verifies every model, voice and phonemizer entry on import and on late
   }
 });
 
-test("TTS download uses exact pinned sources and replaces corrupt bytes only on explicit download", async () => {
-  const { cache, urls, entries } = fixture();
+test("TTS download is refused before cache access or network even with forged URLs", async () => {
+  const { urls, cache } = fixture();
   await prepareSpeechAssets(urls, cache, noDownload, () => {}, { source: "import", file: pack() });
-  for (let i = 0; i < assets.length; i++) {
-    const asset = assets[i];
-    const url = new URL(asset.path, base).href;
-    entries.set(url, new Response(new Uint8Array(asset.bytes)));
-    await assert.rejects(prepareSpeechAssets(urls, cache, noDownload, () => {}), /integrity/);
-    let calls = 0;
-    await prepareSpeechAssets(urls, cache, async (input, init) => {
-      calls++;
-      assert.equal(input, asset.downloadUrl);
-      assert.equal(init?.credentials, "omit");
-      assert.equal(init?.referrerPolicy, "no-referrer");
-      return downloaded(bytes[i], asset.downloadUrl!);
-    }, () => {}, { source: "download" });
-    assert.equal(calls, 1);
+  for (const selected of [urls, speechAssetUrls(base, [{ ...assets[2], downloadUrl: "https://cdn.jsdelivr.net/npm/phonemizer@1.2.1/dist/phonemizer.js" }], "tts")]) {
+    await assert.rejects(prepareSpeechAssets(selected, {
+      match: async () => assert.fail("must reject before cache access"), put: async () => assert.fail("must not write"),
+    }, noDownload, () => assert.fail("must not progress"), { source: "download" }), /TTS download unavailable/);
   }
-  for (const downloadUrl of [undefined, "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/voices/af_heart.bin", "https://other.test/code.js"]) {
-    const bad = speechAssetUrls(base, [{ ...assets[1], downloadUrl }], "tts");
-    await assert.rejects(prepareSpeechAssets(bad, cache, noDownload, () => {}, { source: "download" }), /fixed distribution/);
-  }
-  const phonemizer = speechAssetUrls(base, [assets[2]], "tts");
-  for (const final of ["https://huggingface.co/phonemizer.js", "http://cdn.jsdelivr.net/phonemizer.js", "https://evil.test/phonemizer.js"]) {
-    await assert.rejects(prepareSpeechAssets(phonemizer, fixture().cache, async () => downloaded(bytes[2], final), () => {}, { source: "download" }), /known HTTPS/);
-  }
+  await prepareSpeechAssets(urls, cache, noDownload, () => {}, { source: "cache" });
 });
 
 test("TTS cache failures do not claim readiness or fall back to network", async () => {
@@ -127,7 +103,7 @@ test("candidate inventory pins immutable model/voice/phonemizer bytes without ch
   assert.equal(metadata.revision, revision);
   assert.equal(metadata.voice, "af_heart");
   assert.equal(metadata.sampleRate, 24_000);
-  assert.equal(metadata.phonemizer.sha256, "193481f474f7c1ea81df3195d18b45df8ef7254dbdccb3f193d60215c4897bec");
+  assert.equal(metadata.phonemizer.sha256, "055adbf200338f5cefff27e16e81d9a27b9f73a3e2482f59ebb721e6ca5ab78d");
   const inventory = metadata.files.filter((file: SpeechAsset) => file.path !== "README.md").map((file: SpeechAsset) => ({ ...file, path: model + file.path }));
   inventory.push(metadata.phonemizer);
   assert.equal(speechAssetUrls(base, inventory, "tts").size, 6);

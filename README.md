@@ -1,12 +1,12 @@
 # Pi Web Voice
 
-> **ADR 0002 implemented; qualification is incomplete.** English Whisper recognition and Kokoro `af_heart` synthesis execute in browser workers. OS `speechSynthesis` and cloud/system/alternate-voice fallbacks are removed. Acquisition, preparation, playback enablement and Speak are explicit actions. Full-model TTS, Pixel and isolated-host acceptance remain **unrun**; unresolved native-source provenance and combined GPL obligations block release/conveyance. See [ADR 0002](docs/adr/0002-browser-model-tts.md) and [qualification](docs/tts-qualification.md).
+> **ADR 0002 implemented; qualification is incomplete.** English Whisper recognition and Kokoro `af_heart` synthesis execute in browser workers. OS `speechSynthesis` and cloud/system/alternate-voice fallbacks are removed. Acquisition, preparation, playback enablement and Speak are explicit actions. Full-model TTS, Pixel and isolated-host acceptance remain **unrun**; complete combined-source/dependency delivery and GPL obligations still block release/conveyance. The former opaque phonemizer has been replaced by a reproducible source-built engine. See [ADR 0002](docs/adr/0002-browser-model-tts.md) and [qualification](docs/tts-qualification.md).
 
 Experimental **browser-local voice desk** for `@jmfederico/pi-web`. Talk through a task, approve the exact instruction, and manage concurrent workers through a workspace attention inbox. Read or locally hear results and saved questions, then reply to the exact worker without carrying context between conversations.
 
 **Target device: Google Pixel 8. Real-device acceptance is not yet performed.** Speech recognition and synthesis run on the device running the browser, not the Pi Web server. There is no OpenAI Realtime API, separately billed speech service or remote speech fallback. Ordinary text workers still use their configured Pi provider/authentication and its usage limits/costs.
 
-The project is private, experimental, and not driving-validated. Local installation and server activation are explicit operator steps; repository validation alone does not establish live-host acceptance. See [design](docs/design.md), [security](docs/security.md), and [validation](docs/validation.md).
+The source repository is public; the npm package remains private, experimental, and not driving-validated. Local installation and server activation are explicit operator steps; repository validation alone does not establish live-host acceptance. See [design](docs/design.md), [security](docs/security.md), and [validation](docs/validation.md).
 
 ## Guiding star
 
@@ -25,7 +25,7 @@ Phone speaker ← Web Audio PCM ← local Kokoro worker ← result / saved quest
 ```
 
 - English-only quantized Whisper tiny.en is the initial recognition model, using a browser WASM worker. No Ollama server is needed.
-- Speech assets are acquired explicitly by the browser: verified cache, pinned public download, or local `.pivoice` file import. No additional host route or inference service is required. Downloads need bandwidth/storage; local computation uses phone battery/memory.
+- Speech assets are acquired explicitly by the browser: verified cache or local `.pivoice` file import; recognition additionally supports pinned public download. No additional host route or inference service is required. Downloads need bandwidth/storage; local computation uses phone battery/memory.
 - Separately prepare the pinned Kokoro TTS pack, enable English Heart playback, then tap Speak. Only `af_heart` at normal speed is supported. Missing assets, unsupported text or runtime failure leave text usable without an alternate engine/voice. Preparation never speaks.
 - Recognition produces text, not autonomous tool calls. Choose a new task or exact worker follow-up and approve the exact instruction before it leaves the browser for dispatch.
 - Microphone audio is transient: it is not uploaded to Pi Web/an inference provider or persisted by the plugin.
@@ -53,7 +53,7 @@ Updates are metadata checks every five seconds while the panel is visible, not s
 
 ## Playback and recovery
 
-Recognition and Playback have separate cached preparation, explicit download, file selection/import and cache inspection/clear controls. Selecting a file alone does nothing; tap the matching Import action after returning from the picker. Recognition is about **65 MB**; TTS is about **116 MB**, including its own runtime copy. These are acquisition sizes, not RAM estimates.
+Recognition and Playback have separate cached preparation, file selection/import and cache inspection/clear controls. Recognition supports explicit download; TTS is import-only with a visible download-unavailable reason until an approved source-aware distribution exists. Selecting a file alone does nothing; tap the matching Import action after returning from the picker. Recognition is about **65 MB**; TTS is about **116 MB**, including its own runtime copy. These are acquisition sizes, not RAM estimates.
 
 Only one heavyweight speech runtime is resident per document. Preparing one releases the other's idle runtime, preserving cached assets, typed drafts and workers. Recording/transcription blocks TTS preparation. **Stop speaking** cancels TTS preparation/synthesis/playback and releases its weights; explicitly prepare again before speaking. Full voice off, context changes and hiding the page revoke playback enablement and instruction allowances. Nothing resumes automatically.
 
@@ -92,7 +92,7 @@ GitHub Actions runs Node 24 verification and Chromium browser/runtime checks on 
 
 ### Speech packs: no custom host routes
 
-Pi Web's pinned plugin-artifact limit is **16 MiB**, so the approximately **65 MB recognition pack** and **116 MB TTS pack** are acquired separately by the phone, not bundled in the plugin. The current build is approximately **4.75 MB uncompressed**, including two Transformers worker bundles, excluding external weights/runtime packs. Choose **cached preparation**, an **explicit pinned public download**, or **import a `.pivoice` file** from the phone's files. No reverse-proxy mapping or additional server route is required.
+Pi Web's pinned plugin-artifact limit is **16 MiB**, so the approximately **65 MB recognition pack** and **116 MB TTS pack** are acquired separately by the phone, not bundled in the plugin. The current build is approximately **5.50 MB uncompressed**, including two Transformers worker bundles, excluding external weights/runtime packs. Choose **cached preparation**, an **explicit pinned public download for recognition**, or **import a `.pivoice` file** from the phone's files. No reverse-proxy mapping or additional server route is required.
 
 Downloads contact Hugging Face/CDN and jsDelivr for software files—not an inference API—and omit credentials/referrer. Import offers a no-distribution-network alternative when direct downloads are blocked. Every file is checked against compiled byte lengths and SHA-256 hashes before use. Cached preparation and import never silently download missing files.
 
@@ -118,6 +118,10 @@ requirements above still apply.
 
 These keywords only prepare future discovery. This prototype remains
 `private: true`; do not publish until the acceptance, licensing, and owner-release
-gates above pass. Source is hosted in the private GitHub repository
-[`CompN3rd/pi-web-voice`](https://github.com/CompN3rd/pi-web-voice). Confirm its
-public repository URL and add it to `package.json` before any public release.
+gates above pass. Source is hosted in the public GitHub repository
+[`CompN3rd/pi-web-voice`](https://github.com/CompN3rd/pi-web-voice). Add its confirmed
+repository URL to release metadata before any npm release. Original contributions
+use MIT; third-party code/assets retain their own terms. See [third-party notices](THIRD_PARTY.md)
+and the [licensing audit](docs/licensing-audit.md). Public source does not clear
+redistribution of the unqualified speech packs. A [new source-built English phonemizer candidate](docs/phonemizer-candidate.md)
+now replaces the untraceable production phonemizer pin and supplies traceable native/build sources and real browser checks. TTS is import-only; old packs require re-export/re-import. Source-aware assembly includes application sources and pinned dependency package archives, with explicit completeness/release review gates. No live deployment or release is approved.

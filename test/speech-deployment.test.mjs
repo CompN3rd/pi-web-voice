@@ -43,20 +43,23 @@ test("TTS inventory is independently pinned and does not alter the default recog
   assert.equal(speechCacheName("recognition", recognition), `pi-voice-speech-${sha256(JSON.stringify(recognition)).slice(0, 24)}`);
   assert.notEqual(speechCacheName("tts", recognition), speechCacheName("recognition", recognition));
   assert.notEqual(speechCacheName("tts", assets), speechCacheName("tts", recognition));
+  assert.equal(speechCacheName("recognition", recognition), "pi-voice-speech-4d8396d1642c004c88323bf2");
+  assert.equal(speechCacheName("tts", assets), "pi-voice-tts-509a9b40952d3a5adb703aec");
+  assert.notEqual(speechCacheName("tts", assets), "pi-voice-tts-e12b51622742c29ef163e9e9", "retired published pack cache is never reused");
   assert.equal(speechPack().model, "onnx-community/whisper-tiny.en");
   assert.equal(speechPack("tts").voice, "af_heart");
   assert.equal(assets.length, 8);
-  assert.equal(assets.reduce((total, asset) => total + asset.bytes, 0), 115_849_893);
+  assert.equal(assets.reduce((total, asset) => total + asset.bytes, 0), 116_019_342);
   assert.equal(assets[3].bytes, 92_361_116);
   assert.equal(assets[3].sha256, "fbae9257e1e05ffc727e951ef9b9c98418e6d79f1c9b6b13bd59f5c9028a1478");
   assert.equal(assets[4].path.endsWith("voices/af_heart.bin"), true);
   assert.equal(assets[5].path, "phonemizer/phonemizer.js");
-  assert.equal(assets[5].downloadUrl, "https://cdn.jsdelivr.net/npm/phonemizer@1.2.1/dist/phonemizer.js");
-  assert.deepEqual(assets.slice(-2), recognition.slice(-2));
+  assert.equal(assets[5].downloadUrl, undefined);
+  assert.deepEqual(assets.slice(-2), recognition.slice(-2).map(({ downloadUrl, ...asset }) => asset));
   for (const asset of assets) {
     assert.match(asset.sha256, /^[a-f0-9]{64}$/);
     assert.ok(Number.isSafeInteger(asset.bytes) && asset.bytes > 0);
-    assert.doesNotMatch(asset.downloadUrl, /resolve\/main|@latest/);
+    assert.equal(asset.downloadUrl, undefined);
   }
   await assert.rejects(speechManifest("untrusted"), /Unknown speech pack kind/);
 });
@@ -67,46 +70,30 @@ test("TTS CLI selection never implicitly downloads and rejects unknown packs bef
     for (const kind of ["tts", "unknown"]) {
       const result = spawnSync(process.execPath, [`scripts/${script}`, ...args, "--pack", kind], { encoding: "utf8" });
       assert.notEqual(result.status, 0);
-      assert.match(result.stderr, kind === "unknown" ? /Unknown speech pack kind/ : /Missing or invalid|ENOENT/);
+      assert.match(result.stderr, kind === "unknown" ? /Unknown speech pack kind/ : /Missing or invalid|ENOENT|requires --candidate|source-aware assembly/);
       assert.doesNotMatch(result.stdout, /Downloading/);
       assert.deepEqual(await readdir(root), []);
     }
   }
 }));
 
-test("TTS external notices retain the published license and the unresolved qualification warning", async () => fixture(async root => {
+test("TTS external notices retain the original MIT wrapper and GPL combined-work qualification warning", async () => fixture(async root => {
   await copySpeechNotices(root, "tts");
   assert.deepEqual(JSON.parse(await readFile(join(root, "speech-pack-provenance.json"), "utf8")), speechPack("tts"));
-  assert.equal(await readFile(join(root, "PHONEMIZER-LICENSE"), "utf8"), await readFile("scripts/speech-licenses/PHONEMIZER-LICENSE", "utf8"));
+  assert.equal(await readFile(join(root, "PHONEMIZER-LICENSE"), "utf8"), await readFile("scripts/phonemizer/LICENSE", "utf8"));
   assert.match(await readFile(join(root, "TTS-QUALIFICATION.md"), "utf8"), /corresponding-source/);
   assert.ok((await readFile(join(root, "ort/LICENSE"))).length > 0);
 }));
 
-test("TTS provisioning reuses only verified source bytes and requires download opt-in for missing entries", async () => fixture(async root => {
+test("TTS provisioning requires source-mapped replacement before reusing any model bytes", async () => fixture(async root => {
   const source = join(root, "source");
   const output = join(root, "output");
-  const relative = `models/${speechPack("tts").model}/config.json`;
-  await mkdir(join(source, "models", speechPack("tts").model), { recursive: true });
-  const config = Buffer.from('{\n  "model_type": "style_text_to_speech_2"\n}');
-  assert.equal(validAsset(config, speechPack("tts").files[0]), true);
-  await writeFile(join(source, relative), config);
+  await mkdir(source);
   const result = spawnSync(process.execPath, ["scripts/provision-speech-pack.mjs", "--pack", "tts", "--output", output, "--from-pack", source], { encoding: "utf8" });
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /Missing or invalid tokenizer.json/);
-  assert.match(result.stdout, /Reusing verified config.json/);
+  assert.match(result.stderr, /requires --candidate/);
   assert.doesNotMatch(result.stdout, /Downloading/);
-  assert.deepEqual(await readFile(join(output, relative)), config);
-  assert.deepEqual(await readdir(join(output, "models", speechPack("tts").model)), ["config.json"]);
-  for (const from of ["relative", packageRoot]) {
-    const rejected = spawnSync(process.execPath, ["scripts/provision-speech-pack.mjs", "--pack", "tts", "--output", output, "--from-pack", from], { encoding: "utf8" });
-    assert.notEqual(rejected.status, 0);
-    assert.match(rejected.stderr, /absolute|outside/);
-    assert.doesNotMatch(rejected.stdout, /Downloading/);
-  }
-  await symlink(output, join(source, "linked"), process.platform === "win32" ? "junction" : "dir");
-  const linked = spawnSync(process.execPath, ["scripts/provision-speech-pack.mjs", "--pack", "tts", "--output", output, "--from-pack", source], { encoding: "utf8" });
-  assert.notEqual(linked.status, 0);
-  assert.match(linked.stderr, /symlinks/);
+  assert.deepEqual(await readdir(root), ["source"]);
 }));
 
 test("externalOutput rejects missing/relative/in-repo paths and symlink containment", async () => fixture(async temp => {

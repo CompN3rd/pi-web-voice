@@ -1,0 +1,26 @@
+{
+  "schema": 1,
+  "candidate": "espeak-ng-1.52.0-en-us-pi-1",
+  "nativeRevision": "4870adfa25b1a32b4361592f1be8a40337c58d6c",
+  "emscriptenVersion": "3.1.74",
+  "emscriptenRevision": "1092ec30a3fb1d46b1782ff1b4db5094d3d06ae5",
+  "toolchainBuild": "c2655005234810c7c42e02a18e4696554abe0352",
+  "nodeVersion": "22.16.0",
+  "inputs": [
+    {
+      "name": "espeak-ng.tar.gz",
+      "url": "https://codeload.github.com/espeak-ng/espeak-ng/tar.gz/4870adfa25b1a32b4361592f1be8a40337c58d6c",
+      "sha256": "cd83f84c4e495f281ac14e919aecf2834306ec1ea1b498de8ef6000f3a0f90de"
+    },
+    {
+      "name": "emscripten.tar.xz",
+      "url": "https://storage.googleapis.com/webassembly/emscripten-releases-builds/linux/c2655005234810c7c42e02a18e4696554abe0352/wasm-binaries.tar.xz",
+      "sha256": "a987bb4cded4f29437e8589accac204ce3c134feaaaf251bb97d0fdf450dce65"
+    },
+    {
+      "name": "node.tar.xz",
+      "url": "https://nodejs.org/dist/v22.16.0/node-v22.16.0-linux-x64.tar.xz",
+      "sha256": "f4cb75bb036f0d0eddf6b79d9596df1aaab9ddccd6a20bf489be5abe9467e84e"
+    }
+  ]
+}

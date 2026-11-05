@@ -1,6 +1,12 @@
 # Browser-model TTS qualification — implemented, acceptance incomplete
 
-This is **implementation and automated-check evidence, not full-model, release or device acceptance**. ADR 0002 remains the delivery contract. The panel now uses the Kokoro worker and owned Web Audio playback controller; OS synthesis and its voice enumeration/diagnostics are removed, with no OS/cloud/alternate-voice fallback. Full-model TTS inference, Pixel and isolated-host acceptance remain **unrun**. Native corresponding-source provenance and combined GPL obligations block release/conveyance.
+This is **implementation and automated-check evidence, not full-model, release or device acceptance**. ADR 0002 remains the delivery contract. The panel now uses the Kokoro worker and owned Web Audio playback controller; OS synthesis and its voice enumeration/diagnostics are removed, with no OS/cloud/alternate-voice fallback. Full-model TTS inference, Pixel and isolated-host acceptance remain **unrun**. Complete combined-source delivery, dependency native-source provenance and GPL obligations still block release/conveyance.
+
+## New source-built phonemizer milestone
+
+A separate **eSpeak NG 1.52.0 English candidate** is now built from pinned native source and Emscripten/Node archives, with full native source, wrapper/config/build recipe, embedded-runtime source/notices and hash mapping alongside its executable. Real desktop Chromium checks exercise the production `TtsLoader.phonemize` seam, cache/import integrity, transport guards and the real Kokoro tokenizer without weights. See [exact artifacts and executed evidence](phonemizer-candidate.md).
+
+The production manifest now pins this replacement and a new cache identity. TTS is **import-only**: no public URL is invented, old bytes cannot fall back, and recognition downloads remain unchanged. Old packs require re-export/re-import. The obsolete gzip capability guard is removed; real loader checks confirm operation without gzip/stream helpers. Source-aware assembly includes the native handoff, exact uncommitted application sources, concrete pinned dependency package archives and notices with explicit preferred/native-source completeness gaps. Full combined-work source delivery, model/voice provenance, actual model output and Pixel/owner acceptance remain gates. No live pack is deployed.
 
 ## Exact artifacts inspected
 
@@ -24,28 +30,32 @@ Published `generate()`/`stream()` use `truncation: true`. `generate_from_ids()` 
 - `af_heart.bin`: 522,240 bytes, likewise pinned using revision-specific LFS metadata; not exercised as a voice.
 - Config/tokenizer/model-card bytes retrieved at that revision and SHA-256 hashed. Tokenizer configuration specifies 512 tokens; its postprocessor adds two `$` tokens. The tokenizer normalizer discards unsupported symbols, so token count alone will not establish text fidelity.
 - The existing ORT `1.22.0-dev.20250409-89f8206ba4` glue/WASM, checked against installed bytes as for recognition.
-- Published `phonemizer@1.2.1/dist/phonemizer.js`: 1,322,380 bytes, SHA-256 `193481f474f7c1ea81df3195d18b45df8ef7254dbdccb3f193d60215c4897bec`.
+- Source-built eSpeak NG 1.52.0 module: 1,491,829 bytes, SHA-256 `055adbf200338f5cefff27e16e81d9a27b9f73a3e2482f59ebb721e6ca5ab78d`. Native source/archive mapping: `scripts/phonemizer/candidate.json`.
 
-The TTS binary inventory is 115,849,893 bytes, plus its eight-byte `PIVOTTS1` header. Each pack remains self-contained, including duplicated ORT bytes. These are acquisition sizes, **not peak RAM estimates**. TTS limits are 96,000,000 bytes per file, 128,000,000 total and 12 files; recognition retains its original 64,000,000 / 100,000,000 / 20 limits and byte ordering.
+The TTS binary inventory is 116,019,342 bytes, plus its eight-byte `PIVOTTS1` header. Each pack remains self-contained, including duplicated ORT bytes. These are acquisition sizes, **not peak RAM estimates**. TTS limits are 96,000,000 bytes per file, 128,000,000 total and 12 files; recognition retains its original 64,000,000 / 100,000,000 / 20 limits and byte ordering.
 
 Only the compiled manifest defines paths, order, lengths and hashes. `speech-assets.json` next to an operator's pack remains informational, never an executable/imported manifest. Browser and CLI selection accept only `recognition` or `tts`. Existing commands default to recognition. A TTS `.pivoice` cannot pass a recognition import header check, even if payload sizes happen to match.
 
-## Phonemizer findings and unresolved licensing
+## Historical retired phonemizer findings and unresolved licensing
+
+The old published binary described in this section is no longer selected by production. Its origin remains unknown; replacing it does not retroactively qualify it.
+
+The subsequent [licensing audit](licensing-audit.md) records public-source/history inspection, bundled-notice remediation, additional upstream model evidence and the controlled-rebuild route. It does not clear the existing phonemizer binary or waive this document's gates.
 
 The exact published phonemizer bundle includes an Emscripten-generated eSpeak runtime and embedded compressed data. It initializes at module evaluation, not only at the first `phonemize()` call. Its public English phonemizer API is exported at the end of that same bundle. Static inspection found no `fetch()` calls, dynamic imports or nested-worker constructors, but did find Emscripten lazy-file XHR code. **Static inspection does not establish zero attempted network requests.** The production bootstrap denies alternate transports before dynamically importing dependencies/verified executable bytes. Guarded real-browser phonemizer/ORT loader checks have passed without weights; those results are not full-model acceptance.
 
-The npm package reports Apache-2.0 and ships that license. The exact published license is retained in `scripts/speech-licenses/PHONEMIZER-LICENSE` and copied with external TTS pack notices. This is not a conclusion that all embedded eSpeak-derived code/data is Apache-licensed. The upstream eSpeak NG project has GPL-3.0 licensing; the exact embedded source/build correspondence and applicable distribution/source obligations remain unresolved. Do not distribute/release this candidate based only on npm metadata. Native engine source, patches and toolchain correspondence and combined-work GPL obligations remain release/conveyance blockers. `private: true` is not an exemption when code/assets are sent to others. The GPL text and `TTS-NOTICE.txt` are retained, but are neither a source offer nor legal clearance. Model-card Apache-2.0 also does not settle voice-data provenance independently.
+The npm package reports Apache-2.0 and ships that license. The exact published license is retained in `scripts/speech-licenses/PHONEMIZER-LICENSE` for historical audit evidence only. Current external notices use the original MIT bridge license and GPL/native runtime notices. This is not a conclusion that all embedded eSpeak-derived code/data is Apache-licensed. The upstream eSpeak NG project has GPL-3.0 licensing; the exact embedded source/build correspondence and applicable distribution/source obligations remain unresolved. Do not distribute/release this candidate based only on npm metadata. Native engine source, patches and toolchain correspondence and combined-work GPL obligations remain release/conveyance blockers. `private: true` is not an exemption when code/assets are sent to others. The GPL text and `TTS-NOTICE.txt` are retained, but are neither a source offer nor legal clearance. Model-card Apache-2.0 also does not settle voice-data provenance independently.
 
 Pinned phonemizer source revision from npm metadata: `6835144b7ee9043129222549c1ed2f6a27216278` in `xenova/phonemizer.js`. The source tree includes generated `src/espeakng.worker.js` and `data/espeakng.worker.data`; that alone is not demonstrated corresponding-source compliance for embedded eSpeak.
 
 ## Implemented runtime and UI
 
 - Shared integrity/acquisition with independent compiled recognition/TTS format, path, hash and size policies; wrong-pack rejection and cache-only inference.
-- Explicit `--pack tts` provisioning/export, preserving default Whisper behavior. `--from-pack` reuses verified external assets; downloads still require `--download`.
+- Explicit TTS provisioning requires a hash-verified native source handoff. TTS export uses `tts:assemble`; TTS `--download` and standalone export are refused. Recognition CLI behavior is preserved.
 - Guarded TTS bootstrap, verified phonemizer/ORT loader, direct public-model adapter and versioned bounded worker protocol. Voice data is checked, not taken from upstream `kokoro-voices` caches.
 - Bounded text/tokenizer preflight, transient mono 24 kHz PCM, queue backpressure and user-gesture Web Audio. Exact labelled playback prefixes remain at most 1,000 UTF-16 code units; unsupported text rejects without a fallback.
 - Document-level coordinator for single-runtime residency, half-duplex audio and exact selected-pack cache clearing. Capture stops tracks synchronously and retains asynchronous close/resume settlement; uncertain capture/playback teardown has a five-second deadline and persistent unsafe latch until reload.
-- Independent recognition/Playback preparation, explicit download, picker/import, cache inspection/clear, English Heart enablement and Speak controls. No preparation or successful import speaks automatically. Stop releases TTS and requires reprepare; full off/context/hide revokes broader permissions and playback enablement.
+- Independent recognition/Playback preparation, explicit recognition download, TTS import-only picker/import, cache inspection/clear, English Heart enablement and Speak controls. No preparation or successful import speaks automatically. Stop releases TTS and requires reprepare; full off/context/hide revokes broader permissions and playback enablement.
 - Lifecycle, source/revision/detail-read and picker tickets fence stale work; worker dispatch/admission contracts remain unchanged.
 
 ## Automated evidence and limits
@@ -58,14 +68,14 @@ Current admission additionally rejects signed numbers/ranges, malformed numeric 
 
 Additional opt-in checks use only explicitly supplied external files:
 
-- `VOICE_TTS_PHONEMIZER_FILE=/external/phonemizer.js node test/tts-runtime-browser.mjs` — pinned published phonemizer plus installed matching ORT, no weights or automatic downloads.
+- `VOICE_TTS_PHONEMIZER_FILE=/external/phonemizer.js node test/tts-runtime-browser.mjs` — pinned source-built phonemizer plus installed matching ORT, no weights or automatic downloads.
 - `VOICE_TTS_PACK_FILE=/external/english-tts.pivoice node test/tts-model-browser.mjs` — verified complete external pack and production adapter; **unrun**. Intended checks include bounded finite PCM, multiple chunks, cancellation/reprepare and inference-network refusal.
 
 Set these environment variables using the appropriate shell syntax; `VOICE_BROWSER_EXECUTABLE` can select installed Chromium/Edge. No browser/model installation or provider request is automatic.
 
 ## Remaining gates
 
-Resolve exact native corresponding-source/build provenance, combined-work GPL obligations, converted-model and voice provenance and release-owner review before release/conveyance. Merely retaining license texts or keeping npm publication private does not resolve these obligations.
+Resolve complete combined-source/dependency native-source provenance, combined-work GPL obligations, converted-model and voice provenance and release-owner review before release/conveyance. Merely retaining license texts or keeping npm publication private does not resolve these obligations.
 
 Run separately authorized full-model TTS and shared recognition-model regression checks with verified external assets; synthetic desktop PCM would still not establish intelligibility or Pixel performance. Independently review the implemented safety/network matrix and any remaining text-fidelity limitations. Then, only in an authorized acceptance window, validate authenticated isolated-host paths/CSP and Pixel model accuracy/intelligibility, latency, peak memory, repeated handoffs, storage pressure, heat/battery, microphone indicators, cancellation, lifecycle, headsets and device-level privacy against owner-approved thresholds.
 

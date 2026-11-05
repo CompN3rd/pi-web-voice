@@ -5,7 +5,7 @@ import type { PiWebPlugin, WorkspacePanelContext, JsonValue } from "@jmfederico/
 import { text, MAX_MODEL, type Command, type Lease, type Worker, type ModelOption } from "../protocol.ts";
 import { LocalRecognizer } from "./audio.ts";
 import type { SpeechPreparation } from "./recognition-runtime.ts";
-import type { SpeechPackKind } from "./speech-pack-kind.js";
+import { TTS_IMPORT_ONLY_REASON, type SpeechPackKind } from "./speech-pack-kind.js";
 import { inspectSpeechCache, clearSpeechCache, type SpeechPackInfo, type SpeechCacheState } from "./speech-cache.js";
 declare const __VOICE_PACKS__: Record<SpeechPackKind, SpeechPackInfo>;
 import { ModelSpeechOutput, type ModelSpeechStatus } from "./speech-output.ts";
@@ -295,7 +295,7 @@ export class VoicePanel extends LitElement {
     input.addEventListener("change", finish, { once: true });
     input.addEventListener("cancel", finish, { once: true });
     document.body.append(input);
-    try { input.click(); } catch { this.invalidatePicker(); this.error = "File picker unavailable; use cached preparation or explicit download."; }
+    try { input.click(); } catch { this.invalidatePicker(); this.error = "File picker unavailable; use cached preparation (recognition also supports explicit download)."; }
   }
   private replyTarget() { return this.workers.find(w => targetKey(w) === this.target); }
   private changeTarget(value: string) { this.shutdown(); this.target = value; this.status = "Target changed · microphone work and drafts discarded. Prepare again or type below."; }
@@ -405,6 +405,7 @@ export class VoicePanel extends LitElement {
     void Promise.resolve().then(() => { if (this.current(generation)) return action(); }).catch(error => { if (this.current(generation) && context === scope(this.context)) this.showError(error); });
   }
   private async prepareTts(options: SpeechPreparation = { source: "cache" }) {
+    if (options.source === "download") throw new Error(TTS_IMPORT_ONLY_REASON);
     if (document.hidden || !this.isConnected || this.preparationBlocked || this.speechBusy || this.speech?.ready) return;
     const speech = this.speech;
     if (!speech) throw new Error("Playback controller unavailable; reload this page.");
@@ -543,7 +544,7 @@ export class VoicePanel extends LitElement {
         <p class="muted compact">No automatic announcements. Preparing playback releases idle recognition; Stop releases TTS weights. Prepare explicitly to switch back. No OS/cloud/alternate voice fallback.</p>
       </section>
       <details class="setup" aria-label="Speech setup"><summary>Speech setup & storage</summary>
-        <p>First use: explicitly download a pinned pack or import a .pivoice file. Later, use cached preparation. Preparation never records or speaks. Only one heavyweight speech runtime is resident per document; cached files and typed drafts survive handoff.</p>
+        <p>First use: explicitly download recognition or import a .pivoice file. TTS is import-only. Later, use cached preparation. Preparation never records or speaks. Only one heavyweight speech runtime is resident per document; cached files and typed drafts survive handoff.</p>
         <section aria-label="Recognition pack"><h3>Recognition · Whisper English</h3>
           <p>Approximately 65 MB (${this.packBytes("recognition").toLocaleString()} bytes), not a RAM estimate. Downloads contact Hugging Face/CDN and jsDelivr without credentials/referrer. These hosts see download metadata, never microphone audio. Cached preparation and import never silently download.</p>
           <button ?disabled=${this.preparationBlocked || this.speech?.state === "preparing" || this.recognizer?.ready} @click=${() => this.run(() => this.prepare({ source: "download" }))}>Download pinned English speech pack · ~65 MB</button>
@@ -557,8 +558,9 @@ export class VoicePanel extends LitElement {
         <p>Maximum 20 seconds per recording. Finish only creates an untrusted, editable draft; it never sends an instruction. Cancel requires explicit preparation again.</p>
         </section>
         <section aria-label="Playback pack"><h3>Playback · Kokoro af_heart</h3>
-          <p>Approximately 116 MB (${this.packBytes("tts").toLocaleString()} bytes), including its own runtime copy; not a RAM estimate. Explicit downloads contact the same pinned distribution hosts. Import is local. English Heart at normal speed only.</p>
-          <div class="toolbar"><button ?disabled=${this.preparationBlocked || this.speechBusy || this.speech?.ready} @click=${() => this.run(() => this.prepareTts({ source: "download" }))}>Download pinned TTS pack</button><button aria-label="Import TTS pack (.pivoice)" ?disabled=${this.preparationBlocked || this.speechBusy || this.speech?.ready} @click=${() => this.choosePack("tts")}>Choose TTS pack (.pivoice)</button></div>
+          <p>Approximately 116 MB (${this.packBytes("tts").toLocaleString()} bytes), including its own runtime copy; not a RAM estimate. Import is local; TTS downloads are unavailable. English Heart at normal speed only.</p>
+          <p role="note">${TTS_IMPORT_ONLY_REASON}</p>
+          <div class="toolbar"><button disabled title=${TTS_IMPORT_ONLY_REASON}>Download pinned TTS pack</button><button aria-label="Import TTS pack (.pivoice)" ?disabled=${this.preparationBlocked || this.speechBusy || this.speech?.ready} @click=${() => this.choosePack("tts")}>Choose TTS pack (.pivoice)</button></div>
           ${this.selectedTtsPack ? html`<p>Selected TTS file ${this.selectedTtsPack.name} (${this.selectedTtsPack.size.toLocaleString()} bytes). Selecting a file performs no import.</p><button ?disabled=${this.preparationBlocked || this.speechBusy || this.speech?.ready} @click=${() => {
             const file = this.selectedTtsPack; this.selectedTtsPack = undefined;
             if (file) this.run(() => this.prepareTts({ source: "import", file }));

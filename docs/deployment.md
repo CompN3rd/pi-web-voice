@@ -47,24 +47,59 @@ Keep large source/export files **outside all installed plugin roots**, including
 
 ## TTS pack preparation and playback
 
-ADR 0002's Kokoro runtime and Playback UI are implemented. Use **Prepare cached TTS pack**, **Download pinned TTS pack**, or **Choose TTS pack** followed by **Import selected TTS pack**. Do not pass it to the recognition importer. Preparation never opens the microphone or speaks; separately enable English Heart playback and tap Speak. Only pinned `af_heart` at normal speed is available, with no OS/cloud/alternate-voice fallback. Unsupported text fails conservatively; full-model TTS, Pixel and host acceptance remain unrun. See [qualification and unresolved license gates](tts-qualification.md).
+ADR 0002's Kokoro runtime and Playback UI are implemented. Use **Prepare cached TTS pack** or **Choose TTS pack** followed by **Import selected TTS pack**. Do not pass it to the recognition importer. Preparation never opens the microphone or speaks; separately enable English Heart playback and tap Speak. Only pinned `af_heart` at normal speed is available, with no OS/cloud/alternate-voice fallback. Unsupported text fails conservatively; full-model TTS, Pixel and host acceptance remain unrun. See [qualification and unresolved license gates](tts-qualification.md).
 
 Preparing TTS releases idle recognition; preparing recognition releases TTS. Only one heavyweight runtime is resident per document. Stop speaking releases TTS resources and requires explicit reprepare. Full off/context/hide revokes playback enablement and instruction allowances. Independent cache inspection/clear controls distinguish cached bytes from initialized readiness. Clear cancels only the selected pack's page-owned use and deletes its exact compiled cache identity, not other packs/revisions, host data or worker ledgers. Other tabs are not canceled. Uncertain capture/playback teardown retains ownership up to five seconds and then latches audio unsafe until reload; cache clear/remount is not recovery.
 
-Existing commands still default to `--pack recognition`, preserving Whisper's `PIVOICE1` format and ordered assets. Explicit `--pack tts` selects the independently pinned `PIVOTTS1` format: 115,849,893 payload bytes plus an eight-byte header (about 116 MB), including its own ORT copy. Acquisition size is not a RAM estimate.
+Existing commands still default to `--pack recognition`, preserving Whisper's `PIVOICE1` format and ordered assets. Explicit `--pack tts` selects the independently pinned `PIVOTTS1` format: 116,019,342 payload bytes plus an eight-byte header (about 116 MB), including its own ORT copy. Acquisition size is not a RAM estimate.
+
+**TTS is import-only.** Download is disabled with an explicit reason: the new
+source-built phonemizer has no approved distribution URL. Recognition downloads
+remain functional. Old phonemizer bytes are no longer pinned or fetched. The
+manifest/cache identity changed; reload the page and re-export/re-import a new
+pack. The `PIVOTTS1` format is unchanged. Old cache revisions are not reused or
+automatically deleted; old imports fail length/integrity checks.
 
 ```sh
-# Optional operator opt-in; never run automatically by build or tests.
-npm run speech:provision -- --pack tts --output /external/pi-voice-tts --download
-npm run speech:export -- --pack tts --input /external/pi-voice-tts --output /external/english-tts.pivoice
+# Local, already-verified model/voice files only; no automatic weights download.
+npm run speech:provision -- --pack tts --output /external/pi-voice-tts \
+  --from-models /external/verified/models --candidate /data/verified-native-build
 
-# Alternatively reuse verified complete source assets without downloading.
-npm run speech:provision -- --pack tts --output /external/pi-voice-tts --from-pack /external/verified-tts
+# Assemble a source handoff now, without model weights or a .pivoice file:
+npm run tts:assemble -- --candidate /data/verified-native-build \
+  --output /external/tts-source-handoff --dependency-archives /external/dependency-archives \
+  --download-dependencies
+
+# With all verified local model/voice/runtime assets, also create english-tts.pivoice:
+npm run tts:assemble -- --input /external/pi-voice-tts --candidate /data/verified-native-build \
+  --output /external/tts-complete-handoff --dependency-archives /external/dependency-archives
 ```
 
-`--from-pack` accepts a directory with the compiled relative layout (model, voice, phonemizer and runtime), not a caller-provided manifest. Missing/corrupt files fail without `--download`; existing verified entries remain reusable. `--from-models` remains supported for the older model-directory layout. Do not combine both source options.
+`--download-dependencies` acquires only eight lock-integrity-verified public npm
+software archives, not model weights; omit it for offline cached assembly.
+The full native handoff's binary, source archive, notices and mapping must match
+repository pins. `--from-pack` can replace `--from-models` to reuse the compiled
+relative asset layout, not a caller-supplied executable manifest. The candidate
+handoff is required in either case. TTS `--download` and standalone
+`speech:export --pack tts` fail before acquisition/output; use source-aware
+assembly instead. Recognition CLI behavior is unchanged.
 
-Keep the source directory's model card, provenance, published phonemizer license and `TTS-QUALIFICATION.md` alongside any privately exported file. The embedded eSpeak-derived runtime's native corresponding-source provenance and combined GPL obligations are unresolved and block release/conveyance; `private: true` is not an exemption when code/assets are sent to others. This tooling is not permission to distribute/release the candidate. No weights are bundled into the plugin.
+Assembly preserves exact **uncommitted** application/build/test/docs bytes using
+an explicit source allowlist, refuses symlinks/credential-like paths/unexpected
+payloads and excludes `.git`, `node_modules`, generated outputs and unrelated
+files. It includes concrete dependency package archives and notices, with exact
+hashes in `DISTRIBUTION.json` and `DEPENDENCIES.json`. These archives may contain
+generated code; preferred/native source completeness (notably ONNX) remains an
+explicit review gate, not a claim of complete GPL compliance. A changing
+worktree aborts assembly. The browser consumes only compiled pins and pack bytes,
+never the producer's informational source manifests.
+
+Keep the entire handoff together. Application original files remain MIT;
+linked eSpeak obligations are GPL-3.0-or-later. No assembly flag waives source,
+model/voice, device or release-owner review. With no `--input`, the output is a
+real engine/application/dependency source handoff but **not** a runnable full TTS
+pack. With `--input`, every model/voice/runtime byte and model card is verified
+before the handoff is atomically published. See [current evidence](phonemizer-candidate.md).
 
 ## Development verification
 
@@ -83,7 +118,7 @@ The optional `npm run test:model -- --output /external/pi-voice-pack` uses an ex
 The additional TTS checks are separately invoked (no automatic download):
 
 ```sh
-# Set to an explicit external published phonemizer@1.2.1 file.
+# Set to the explicit external source-built production phonemizer file.
 VOICE_TTS_PHONEMIZER_FILE=/external/phonemizer.js npm run test:tts-runtime
 VOICE_TTS_PHONEMIZER_FILE=/external/phonemizer.js npm run test:tts-phonemizer
 # Set to an explicit external, verified PIVOTTS1 import file.

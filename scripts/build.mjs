@@ -1,4 +1,11 @@
-import { build } from "esbuild";
+import { build as esbuild } from "esbuild";
+import { writeBundleNotices } from "./bundle-notices.mjs";
+const bundledInputs = new Set();
+async function build(options) {
+  const result = await esbuild({ ...options, metafile: true });
+  for (const input of Object.keys(result.metafile.inputs)) bundledInputs.add(input);
+  return result;
+}
 import { lstat, rm, readdir, readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { copySpeechNotices, packageRoot, speechCacheName, speechManifest } from "./speech-assets.mjs";
@@ -42,5 +49,6 @@ if (process.argv.includes("--speech-only")) {
   await build({ entryPoints: ["src/server.ts"], outfile: "dist/server.js", bundle: true, format: "esm", platform: "node", target: "node24" });
   await build({ entryPoints: ["src/companion.ts"], outfile: "dist/companion.js", bundle: true, format: "esm", platform: "node", target: "node24", packages: "external" });
 }
+await writeBundleNotices(packageRoot, bundledInputs);
 await checkBrowserDirectory("dist/browser");
 if (!process.argv.includes("--speech-only")) checkPackage();
