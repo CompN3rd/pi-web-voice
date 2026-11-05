@@ -98,5 +98,6 @@ requirements above still apply.
 
 These keywords only prepare future discovery. This prototype remains
 `private: true`; do not publish until the acceptance, licensing, and owner-release
-gates above pass. No Git repository remote is configured in this checkout; add
-its confirmed public repository URL to `package.json` before any public release.
+gates above pass. Source is hosted in the private GitHub repository
+[`CompN3rd/pi-web-voice`](https://github.com/CompN3rd/pi-web-voice). Confirm its
+public repository URL and add it to `package.json` before any public release.
