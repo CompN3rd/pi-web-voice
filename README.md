@@ -2,11 +2,17 @@
 
 > **ADR 0002 implemented; qualification is incomplete.** English Whisper recognition and Kokoro `af_heart` synthesis execute in browser workers. OS `speechSynthesis` and cloud/system/alternate-voice fallbacks are removed. Acquisition, preparation, playback enablement and Speak are explicit actions. Full-model TTS, Pixel and isolated-host acceptance remain **unrun**; unresolved native-source provenance and combined GPL obligations block release/conveyance. See [ADR 0002](docs/adr/0002-browser-model-tts.md) and [qualification](docs/tts-qualification.md).
 
-Experimental **phone-browser-local speech interface** for `@jmfederico/pi-web`. Dictate a text task on your phone, review it, send it to an ordinary Pi worker, and optionally request local model playback of its result.
+Experimental **browser-local voice desk** for `@jmfederico/pi-web`. Talk through a task, approve the exact instruction, and manage concurrent workers through a workspace attention inbox. Read or locally hear results and saved questions, then reply to the exact worker without carrying context between conversations.
 
 **Target device: Google Pixel 8. Real-device acceptance is not yet performed.** Speech recognition and synthesis run on the device running the browser, not the Pi Web server. There is no OpenAI Realtime API, separately billed speech service or remote speech fallback. Ordinary text workers still use their configured Pi provider/authentication and its usage limits/costs.
 
 The project is private, experimental, and not driving-validated. Local installation and server activation are explicit operator steps; repository validation alone does not establish live-host acceptance. See [design](docs/design.md), [security](docs/security.md), and [validation](docs/validation.md).
+
+## Guiding star
+
+Reach Claude Voice Mode–level vocal interaction fidelity in Pi Web, using open-source speech models on the browser device. Go beyond a single conversation: become a vocal orchestration plane for delegating across projects/workspace sessions, hearing feedback and answering workers that need input, with eventual exploration of Pi Web's first-party multi-machine federation.
+
+This is the long-term goal, not current capability. See [the product vision](docs/vision.md); the prototype's present scope and safety limits remain below.
 
 ## Architecture
 
@@ -24,12 +30,22 @@ Phone speaker ← Web Audio PCM ← local Kokoro worker ← result / saved quest
 - Recognition produces text, not autonomous tool calls. Choose a new task or exact worker follow-up and approve the exact instruction before it leaves the browser for dispatch.
 - Microphone audio is transient: it is not uploaded to Pi Web/an inference provider or persisted by the plugin.
 
+## Foreground voice workflow
+
+1. **Prepare once for the current audio mode.** Cached recognition preparation stays beside the microphone. On first use, open **Speech setup & storage** for explicit download or file import. Nothing records during preparation. Text always works without speech assets.
+2. **Talk, pause, refine.** Choose New task or an exact worker. Tap Start recording, then Finish. Optional **Finish on a pause** ends capture after speech energy and 1.2 seconds of quiet; it is an energy heuristic, not intent recognition. Noise can prevent ending and pauses can cut a thought short. The 20-second cap remains. Further recordings append thoughts to the editable draft; they never replace it silently or send it.
+3. **Review, then approve.** Propose exact instruction shows the route, worker/revision, model, title and exact text. An empty title gets a deterministic suggestion from the instruction, so typing is not required. Approve exact instruction is still a separate tap. An admission receipt is not proof of delivery or success; uncertain attempts have no replay button.
+4. **Work across the workspace.** The attention count and **Review next update** prioritize unreviewed questions, uncertain work, failures and settled results. **Review and reply** reads a fresh saved question and selects that exact worker/revision, with the question beside the composer. Changing target/model discards the old draft and audio. Other workers keep running.
+5. **Listen deliberately.** Prepare cached TTS, enable English Heart, then Speak worker status or a selected result/question. Briefings use deterministic status wording, workspace identity and numbered workers (including duplicate titles); no new model/provider is called to summarize. Exact spoken prefixes are visible. Switching back to the microphone requires explicit recognition preparation, not another download if cached.
+
+Updates are metadata checks every five seconds while the panel is visible, not streaming tool progress. Full results/questions are read only on request. **Mark reviewed** applies only to that revision in this panel: it neither answers a worker nor changes its status, and resets on context change/remount. New revisions reappear as updates. Worker numbers distinguish cards within this workspace; exact IDs, not numbers or names, route instructions. No automatic spoken announcements, background notifications or cross-project access are added.
+
 ## Operating limits
 
 - Use authenticated **HTTPS** on the phone. Plain `http://192.168…` does not qualify for browser microphone access.
 - Foreground use only. Hiding the page, switching context, closing the panel or turning voice off cancels audio work. No wake word, background recording, locked-screen guarantee or native mobile integration is included.
 - Transcription can be wrong or hallucinate on noise/silence. Review exact text. Speech finishing is not dispatch approval.
-- There is no free-form conversational intent controller. New-task/reply selection, status reads and playback use explicit controls.
+- There is no free-form conversational intent controller. Routing, exact approval and playback use explicit controls; pause ending only creates an editable draft.
 - This controls only the selected workspace. Public API4/server API3 is retained; no private routes or API5-only catalogs.
 - Stop speaking/off does **not** stop coding workers. Use the ordinary session UI for worker control.
 - Core `ask_user`, other extensions' dialogs and ordinary prose questions are not automatically bridged. The companion `voice_request_input` saves a bounded question; an approved follow-up answers it.
@@ -41,13 +57,13 @@ Recognition and Playback have separate cached preparation, explicit download, fi
 
 Only one heavyweight speech runtime is resident per document. Preparing one releases the other's idle runtime, preserving cached assets, typed drafts and workers. Recording/transcription blocks TTS preparation. **Stop speaking** cancels TTS preparation/synthesis/playback and releases its weights; explicitly prepare again before speaking. Full voice off, context changes and hiding the page revoke playback enablement and instruction allowances. Nothing resumes automatically.
 
-Playback is an explicitly labelled prefix of at most 1,000 UTF-16 code units; full text remains visible. Conservative unsupported-text rejection is intentional: unsupported scripts/symbols, signed numbers/ranges, malformed numeric forms, numeric spans over 15 digits and words/identifiers over 32 characters reject before audio. Supported text can still be mispronounced. No text is sent to another speech engine.
+Playback is an explicitly labelled prefix of at most 1,000 UTF-16 code units, including its workspace/worker introduction; full text remains visible. Conservative unsupported-text rejection is intentional: unsupported scripts/symbols, signed numbers/ranges, malformed numeric forms, numeric spans over 15 digits and words/identifiers over 32 characters reject before audio. Supported text can still be mispronounced. No text is sent to another speech engine.
 
 Clear recognition/TTS cache cancels this page's selected pack use under the audio coordinator, then deletes only that pack's exact compiled cache identity. It does not clear the other pack, old revisions, host data or worker ledgers, and is not cross-tab cancellation. Cache presence is not initialized readiness. If audio teardown cannot be certified within five seconds, a document-level unsafe latch blocks audio until page reload; recreating the panel or clearing cache does not reset it.
 
 ## Worker safety and recovery
 
-The existing durable worker ledger, exact IDs, payload hashes, revision/sequence fences and conservative `unknown` outcomes are retained. Workers survive panel closure. No uncertain creation or prompt delivery is automatically retried.
+The existing durable worker ledger, exact IDs, payload hashes, revision/sequence fences and conservative `unknown` outcomes are retained. Workers survive panel closure. No uncertain creation or prompt delivery is automatically retried. A companion delivery exception after admission is `unknown`, even if it appears to throw before sending; its saved receipt blocks duplicate delivery and new voice follow-ups.
 
 Admission is saved before session creation and identity before kickoff. A crash between host publication and identity save can still leave an unrecorded published session. Inspect uncertain work instead of submitting a replacement. On backend restart, records become unknown until an already-hosted companion can reconcile them; no saved session is silently resumed.
 
@@ -69,6 +85,10 @@ npm run test:runtime
 `verify` runs strict typechecking, unit/contract tests and bundles. Browser checks use Playwright Core with installed Chromium/Edge, fake media/local inference/host and intercepted networking. Set `VOICE_BROWSER_EXECUTABLE` if needed. They do not establish Pixel performance, real microphone behavior, actual model accuracy, TTS intelligibility or device privacy.
 
 `test:runtime` exercises the actual pinned ONNX glue/WASM, including cache eviction/corruption and refusal of its XHR fallback. It does not download model weights or establish transcription accuracy.
+
+### CI and publishing
+
+GitHub Actions runs Node 24 verification and Chromium browser/runtime checks on main pushes and pull requests. A matching stable version tag can run the OIDC npm publishing pipeline, but publication is deliberately blocked while this prototype remains private and unqualified. See [release setup and gates](docs/releasing.md); no token-based fallback or automatic live activation is included.
 
 ### Speech packs: no custom host routes
 

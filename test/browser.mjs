@@ -36,7 +36,7 @@ try {
   });
   const button = name => page.getByRole("button", { name, exact: true });
   const prompt = () => page.getByLabel("Editable transcript / task text");
-  const reset = async () => { await page.goto("http://localhost:43119/"); await page.getByText("No tracked workers in this workspace.").waitFor(); };
+  const reset = async () => { await page.goto("http://localhost:43119/"); await page.getByText("No tracked workers in this workspace.", { exact: true }).waitFor(); await page.getByText("Speech setup & storage", { exact: true }).click(); };
   const prepare = async () => { await button("Prepare local English speech pack").click(); await page.getByText("Local speech ready · audio stays on this device", { exact: true }).waitFor(); };
   const start = async () => { await button("Start recording").click(); await page.getByText("Listening locally · finish within 20 seconds", { exact: true }).waitFor(); };
   const prepareTts = async () => {
@@ -225,6 +225,7 @@ try {
   await page.evaluate(() => { fixture.stats.pendingPermission = true; });
   await button("Start recording").click();
   await page.getByText("Requesting microphone permission for local capture…", { exact: true }).waitFor();
+  assert.equal(await page.locator('.composer .badge').textContent(), "Opening microphone"); checks++;
   assert.equal(await page.evaluate(() => fixture.stats.speechCancels), 1);
   assert.equal(await button("Speak result / question prefix").isEnabled(), false); checks++;
   await page.evaluate(() => fixture.resolvePermission());
@@ -457,6 +458,7 @@ try {
     if (cancellation === "hide") await page.evaluate(() => fixture.setHidden(false));
     if (cancellation === "remount") await page.evaluate(() => fixture.mount());
     await page.getByText(/Audio teardown is uncertain/).first().waitFor();
+    assert.equal(await page.locator('.composer .badge').textContent(), "Microphone state uncertain · reload required"); checks++;
     assert.equal(await button("Prepare local English speech pack").isEnabled(), false);
     assert.equal(await button("Start recording").isEnabled(), false);
     assert.equal(await button("Speak worker status").isEnabled(), false);
@@ -552,7 +554,7 @@ try {
   await button("Read text / question").click();
   await page.waitForFunction(() => fixture.stats.requests.filter(r => r.operation === "read").length === 2);
   await prepareTts(); await speakResult();
-  assert.equal(await page.evaluate(() => fixture.stats.spoken.at(-1).text), "Displayed old result");
+  assert.equal(await page.evaluate(() => fixture.stats.spoken.at(-1).text), "workspace-a. Worker 1, Fixture task. Working. Displayed old result");
   await page.evaluate(() => fixture.resolveRead());
   await page.getByText("Replacement result", { exact: true }).waitFor();
   assert.equal(await page.evaluate(() => fixture.stats.speechCancels), 1);
@@ -562,17 +564,19 @@ try {
   // The playback prefix retains whole surrogate pairs at the character limit.
   await reset(); await createWorker();
   await prepareTts(); await enableTts();
+  const intro = "workspace-a. Worker 1, Fixture task. Working. ";
+  const budget = 1000 - intro.length;
   for (const [value, expected] of [
-    ["x".repeat(999) + "😀tail", "x".repeat(999)],
-    ["x".repeat(998) + "😀tail", "x".repeat(998) + "😀"],
-    ["x".repeat(1001), "x".repeat(1000)],
+    ["x".repeat(budget - 1) + "😀tail", "x".repeat(budget - 1)],
+    ["x".repeat(budget - 2) + "😀tail", "x".repeat(budget - 2) + "😀"],
+    ["x".repeat(1001), "x".repeat(budget)],
     ["Short 😀", "Short 😀"],
   ]) {
     await page.evaluate(value => fixture.setResult(value), value);
     await button("Read text / question").click();
     await page.getByText(value, { exact: true }).waitFor();
     await prepareTts(); await speakResult();
-    assert.equal(await page.evaluate(() => fixture.stats.spoken.at(-1).text), expected); checks++;
+    assert.equal(await page.evaluate(() => fixture.stats.spoken.at(-1).text), intro + expected); checks++;
   }
 
   // A later chunk failure is visibly partial, never labelled complete or replayed.
@@ -647,9 +651,162 @@ try {
   await button("Read text / question").click();
   await page.waitForFunction(() => fixture.stats.requests.some(r => r.operation === "read"));
   await page.evaluate(() => fixture.mount("workspace-b"));
-  await page.getByText("No tracked workers in this workspace.").waitFor();
+  await page.getByText("No tracked workers in this workspace.", { exact: true }).waitFor();
   await page.evaluate(() => fixture.resolveRead());
   assert.equal(await page.getByText("<img src=x onerror=alert('bad')> Escaped result", { exact: true }).count(), 0); checks++;
+  // Voice-first path needs no keyboard: optional pause ending, suggested title, still two exact taps.
+  await reset();
+  await page.getByText("Speech setup & storage", { exact: true }).click();
+  assert.equal(await button("Download pinned TTS pack").isVisible(), false);
+  assert.equal(await button("Prepare local English speech pack").isVisible(), true);
+  assert.equal(await button("Start recording").isVisible(), true);
+  await prepare(); await page.getByLabel("Finish on a pause · draft only", { exact: true }).check(); await start();
+  await page.evaluate(() => fixture.pause());
+  await page.waitForFunction(() => fixture.stats.transcriptions === 1);
+  await page.waitForFunction(() => document.querySelector("compn3rd-voice-panel").transcript.length > 0);
+  assert.equal(await page.evaluate(() => fixture.stats.captures), 1);
+  assert.equal(await page.evaluate(() => fixture.stats.instructions), 0);
+  await button("Propose exact instruction").click();
+  await page.getByRole("article", { name: "Exact proposal" }).getByRole("heading", { name: /Proposed Dictated instruction/ }).waitFor();
+  assert.equal(await page.evaluate(() => fixture.stats.instructions), 0);
+  await button("Approve exact instruction").click();
+  await page.getByLabel("Instruction receipt", { exact: true }).getByText("Instruction admitted", { exact: true }).waitFor();
+  assert.equal(await page.evaluate(() => fixture.stats.requests.find(r => r.operation === "execute").input.command.title), "Dictated instruction, never automatic approval");
+  checks++;
+
+  // Further utterances add to the same exact draft, not a fresh command or implicit send.
+  await reset(); await prompt().fill("Keep my first thought."); await prepare(); await start();
+  await button("Finish recording").click();
+  await page.waitForFunction(() => document.querySelector("compn3rd-voice-panel").transcript.includes("Dictated"));
+  assert.equal(await prompt().inputValue(), "Keep my first thought.\n\nDictated instruction, never automatic approval");
+  assert.equal(await page.evaluate(() => fixture.stats.instructions), 0);
+  await prompt().fill("x".repeat(16000)); await start(); await button("Finish recording").click();
+  await page.getByRole("alert").filter({ hasText: "existing draft is unchanged" }).waitFor();
+  assert.equal((await prompt().inputValue()).length, 16000); checks++;
+
+  // Duplicate titles remain separate identities; a question shortcut binds its exact fresh revision.
+  await reset();
+  await page.evaluate(() => fixture.seedWorkers([
+    { question: "Which color for the header?" }, { question: "Which database should I use?" }, { status: "unknown" },
+  ]));
+  await button("Refresh status").click();
+  await page.getByText("3 updates to review", { exact: true }).waitFor();
+  assert.equal(await page.evaluate(() => fixture.stats.requests.filter(r => r.operation === "read").length), 0);
+  await prompt().fill("A draft for someone else");
+  const second = page.getByRole("article", { name: "Worker 2: Same title", exact: true });
+  await second.getByRole("button", { name: "Review and reply", exact: true }).click();
+  await page.getByText("Answering this saved question", { exact: true }).waitFor();
+  assert.equal(await prompt().inputValue(), "");
+  assert.equal(await page.getByLabel("Instruction target").inputValue(), "11111111-1111-4111-8111-000000000002:1");
+  assert.match(await page.getByRole("region", { name: "Exact instruction", exact: true }).innerText(), /Which database should I use/);
+  assert.equal(await page.evaluate(() => document.querySelector("compn3rd-voice-panel").shadowRoot.activeElement?.tagName), "H3");
+  await prompt().fill("Use SQLite, and keep the existing data."); await button("Propose exact instruction").click();
+  await button("Approve exact instruction").click();
+  await page.waitForFunction(() => fixture.stats.instructions === 1);
+  assert.equal(await page.evaluate(() => fixture.stats.requests.find(r => r.operation === "execute").input.command.workerId), "11111111-1111-4111-8111-000000000002");
+  checks++;
+
+  // Polling never steals a draft/focus or reads/speaks results; reviewed revisions do not acknowledge workers.
+  await reset(); await prompt().fill("Still composing a different task");
+  await page.evaluate(() => fixture.seedWorkers([{ status: "completed" }, { question: "Choose the migration?" }]));
+  await button("Refresh status").click(); await page.getByText("2 updates to review", { exact: true }).waitFor();
+  await prompt().focus();
+  await page.evaluate(() => document.querySelector("compn3rd-voice-panel").refresh());
+  assert.equal(await page.evaluate(() => document.querySelector("compn3rd-voice-panel").shadowRoot.activeElement?.tagName), "TEXTAREA");
+  assert.equal(await prompt().inputValue(), "Still composing a different task");
+  assert.equal(await page.evaluate(() => fixture.stats.spoken.length + fixture.stats.requests.filter(r => r.operation === "read").length), 0);
+  await button("Review next update").click();
+  await page.getByRole("article", { name: "Worker detail", exact: true }).getByText("Choose the migration?", { exact: true }).waitFor();
+  await button("Mark reviewed").click(); await page.getByText("1 updates to review", { exact: true }).waitFor();
+  assert.equal(await page.evaluate(async () => (await fixture.request("list"))[1].status), "needs-input");
+  await button("Review next update").click(); await button("Mark reviewed").click();
+  await page.getByText("0 updates to review", { exact: true }).waitFor();
+  await page.evaluate(() => fixture.bumpRevision()); await button("Refresh status").click();
+  await page.getByText("1 updates to review", { exact: true }).waitFor();
+  await page.evaluate(() => fixture.mount("workspace-b"));
+  await page.getByText("0 updates to review", { exact: true }).waitFor(); checks++;
+
+  // A pending shortcut cannot bind stale worker state, nor cross context after its read.
+  for (const change of ["revision", "context"]) {
+    await reset(); await page.evaluate(() => fixture.seedWorkers([{ question: "Old question?" }]));
+    await button("Refresh status").click(); await button("Review and reply").waitFor();
+    await page.evaluate(() => { fixture.stats.pendingRead = true; });
+    await button("Review and reply").click();
+    await page.waitForFunction(() => fixture.stats.requests.some(r => r.operation === "read"));
+    if (change === "revision") { await page.evaluate(() => fixture.bumpRevision()); await button("Refresh status").click(); }
+    else { await page.evaluate(() => fixture.mount("workspace-b")); await page.getByText("No tracked workers in this workspace.", { exact: true }).waitFor(); }
+    await page.evaluate(async () => { fixture.resolveRead(); await new Promise(requestAnimationFrame); });
+    assert.equal(await page.getByLabel("Instruction target").inputValue(), "new");
+    assert.equal(await page.getByText("Answering this saved question", { exact: true }).count(), 0);
+    assert.equal(await page.evaluate(() => fixture.stats.instructions), 0); checks++;
+  }
+
+  // Briefings distinguish same-title workers, prioritize attention, and preview exactly what is spoken.
+  await reset(); await page.evaluate(() => fixture.seedWorkers([{ status: "running" }, { question: "Private question" }]));
+  await button("Refresh status").click(); await prepareTts(); await enableTts(); await speakStatus();
+  const briefing = await page.evaluate(() => fixture.stats.spoken.at(-1).text);
+  assert.match(briefing, /^workspace-a\./);
+  assert.ok(briefing.indexOf("Worker 2, Same title: Needs your answer") < briefing.indexOf("Worker 1, Same title: Working"));
+  assert.ok(!briefing.includes("Private question"));
+  await page.getByText(/^Exact status playback prefix/).click();
+  assert.equal(await page.getByRole("region", { name: "Model speech playback", exact: true }).locator("pre").innerText(), briefing);
+  assert.equal(await page.evaluate(() => fixture.stats.requests.filter(r => r.operation === "read").length), 0); checks++;
+
+  // Lost status shows stale snapshots explicitly. A consumed uncertain instruction has no replay UI.
+  await reset(); await createWorker();
+  await page.evaluate(() => { fixture.stats.failList = true; }); await button("Refresh status").click();
+  await page.getByText("Status unavailable · showing the last snapshot, not live state.", { exact: true }).waitFor();
+  await page.evaluate(() => { fixture.stats.failList = false; }); await button("Refresh status").click();
+  await page.waitForFunction(() => !document.querySelector("compn3rd-voice-panel").refreshError);
+  assert.equal(await page.evaluate(() => fixture.stats.instructions), 1); checks++;
+  await reset(); await propose(); await page.evaluate(() => { fixture.stats.failExecute = true; });
+  await button("Approve exact instruction").click();
+  await page.getByLabel("Instruction receipt", { exact: true }).getByText("Delivery uncertain", { exact: true }).waitFor();
+  assert.equal(await prompt().inputValue(), "");
+  assert.equal(await button("Propose exact instruction").isEnabled(), false);
+  assert.equal(await button("Approve exact instruction").count(), 0); checks++;
+
+  // Compact default at narrow phone width, with all critical controls keyboard reachable.
+  await reset(); await page.getByText("Speech setup & storage", { exact: true }).click();
+  await page.setViewportSize({ width: 320, height: 740 });
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+  await page.getByLabel("Instruction target").focus();
+  await page.keyboard.press("Tab");
+  assert.equal(await page.evaluate(() => document.querySelector("compn3rd-voice-panel").shadowRoot.activeElement?.textContent), "Prepare local English speech pack");
+  await page.setViewportSize({ width: 390, height: 844 }); checks++;
+
+  // A newer detail invalidates captured reply authority immediately; late list cannot roll it back.
+  await reset(); await page.evaluate(() => fixture.seedWorkers([{ question: "Original question?" }]));
+  await button("Refresh status").click(); await chooseReply(); await prepare(); await start();
+  await page.evaluate(() => { fixture.stats.pendingTranscript = true; }); await button("Finish recording").click();
+  await page.getByText("Transcribing on this device · microphone off…", { exact: true }).waitFor();
+  const listCount = await page.evaluate(() => fixture.stats.requests.filter(r => r.operation === "list").length);
+  await page.evaluate(() => { fixture.stats.pendingList = true; }); await button("Refresh status").click();
+  await page.waitForFunction(count => fixture.stats.requests.filter(r => r.operation === "list").length > count, listCount);
+  await page.evaluate(() => fixture.bumpRevision()); await button("Read selected worker context").click();
+  await page.getByText("Worker revision changed · draft discarded. Select an exact target again.", { exact: true }).waitFor();
+  await page.evaluate(async () => { fixture.resolveList(); fixture.resolveTranscript("Obsolete answer"); await new Promise(requestAnimationFrame); });
+  assert.equal(await page.evaluate(() => document.querySelector("compn3rd-voice-panel").workers[0].revision), 2);
+  assert.equal(await prompt().inputValue(), "");
+  assert.equal(await page.getByLabel("Instruction target").inputValue(), "");
+  assert.equal(await page.evaluate(() => fixture.stats.instructions), 0); checks++;
+
+  // An active spoken status preview remains the exact captured text when local review state changes.
+  await reset(); await page.evaluate(() => fixture.seedWorkers([{ question: "Question?" }]));
+  await button("Refresh status").click(); await button("Read text / question").click();
+  await prepareTts(); await enableTts(); await speakStatus();
+  const capturedStatus = await page.evaluate(() => fixture.stats.spoken.at(-1).text);
+  await button("Mark reviewed").click(); await page.getByText("0 updates to review", { exact: true }).waitFor();
+  await page.getByText(/^Exact status playback prefix/).click();
+  assert.equal(await page.getByRole("region", { name: "Model speech playback", exact: true }).locator("pre").innerText(), capturedStatus);
+  assert.equal(await page.evaluate(() => fixture.stats.spoken.length), 1); checks++;
+
+  await reset(); await page.evaluate(() => fixture.seedWorkers([{ status: "running" }, { status: "starting" }, { status: "unknown" }]));
+  await button("Refresh status").click(); await prompt().fill("Keep this draft until a slot opens");
+  assert.equal(await button("Propose exact instruction").isEnabled(), false);
+  assert.match(await page.getByRole("region", { name: "Exact instruction", exact: true }).innerText(), /All three active or uncertain slots/);
+  assert.equal(await page.evaluate(() => fixture.stats.instructions), 0); checks++;
+
   assert.deepEqual(errors, []); assert.deepEqual(blockedNetwork, []); checks++;
   console.log(`Browser fixture: ${checks} checks passed (real LocalRecognizer with fake PCM/runtime, real model output controller with fake Web Audio/TTS runtime and host, mobile viewport, all networking intercepted; no model downloads or live acceptance).`);
 } finally { await browser.close(); }

@@ -236,8 +236,8 @@ export default function companion(pi: ExtensionAPI): void {
       if (accepted && generation === epoch) {
         clearStartTimer();
         turn = undefined;
-        transition("failed", "Worker prompt delivery failed. Inspect the conversation before continuing.");
-        return { ok: false, snapshot: snapshot(), error: "Worker prompt delivery failed" };
+        transition("unknown", "Worker prompt delivery is uncertain. Inspect the conversation; no automatic retry was attempted.");
+        return { ok: false, snapshot: snapshot(), error: "Worker prompt delivery is uncertain" };
       }
       // Errors from provider/model APIs can contain secrets. Only expose our fixed validation errors.
       const safe = error instanceof Error && ["Worker state changed; refresh and inspect before replying", "Session must be idle with no pending messages", "Start requires a fresh empty conversation with no worker marker", "Worker does not match this conversation", "Worker receipt limit (128) reached; create a new worker", "Requested model is not available", "Requested model authentication is unavailable", "Session changed while selecting the model", "No usable session model selected"].includes(error.message);

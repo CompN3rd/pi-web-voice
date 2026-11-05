@@ -1,5 +1,9 @@
 # Browser-local voice design
 
+## Product direction
+
+The [guiding vision](vision.md) is Claude Voice Mode–level interaction fidelity using open-source speech models on browser-host hardware, growing into vocal orchestration across project/workspace sessions and potentially Pi Web's first-party multi-machine federation. This document describes the current bounded implementation, not the ceiling of that ambition. Cross-project routing and federation remain future capabilities requiring separate design and validation.
+
 ## Decision
 
 **Implemented playback decision:** English-only Whisper tiny.en recognition and Kokoro `af_heart` synthesis run in separate browser workers. OS `speechSynthesis` and remote/system/alternate-voice fallbacks are removed. Exact inventory/runtime pins and automated loader/controller checks are recorded in [qualification](tts-qualification.md); full-model TTS, Pixel and live-host acceptance remain unrun. [ADR 0002](adr/0002-browser-model-tts.md) remains the delivery contract, including unresolved license gates.
@@ -24,13 +28,29 @@ Kokoro worker → bounded mono 24 kHz PCM → owned Web Audio → phone speaker
 
 The phone loads application code from Pi Web and acquires speech assets through verified cache, explicit pinned public downloads or local file import; see [ADR 0001](adr/0001-browser-owned-speech-pack-acquisition.md). Approved task text goes to Pi Web and the worker's configured provider. Audio does not go to the Pi Web backend or an inference service. Local speech does **not** make text workers offline or change their provider billing/limits.
 
+## Foreground voice desk and capability boundary
+
+This iteration turns the speech form into a bounded orchestration surface without adding an intent agent or widening dispatch authority. The route and microphone state lead a compact composer, followed by worker attention and deliberate playback. Pack download/import, storage inspection and diagnostics are progressive disclosures rather than the primary interaction. Controls retain keyboard access, visible focus and phone-width wrapping; intentional Review actions focus a heading rather than forcing the phone keyboard. Background polling never steals focus.
+
+Capability inspection used the installed `@jmfederico/pi-web@1.202610.3` public API4/API3 declarations and `docs/plugins.md`. API4 supplies selected machine/workspace identity, package-paired peer requests, exact-session navigation and optional read-only project discovery. API3 supplies host-resolved peer scope, visible session creation and connections to already-hosted companions. Paired channels are available, but adding a second transport is unnecessary for this bounded metadata inbox. Existing five-second foreground polling and opt-in reads suffice; no private routes, catalog assumptions or host changes are introduced. Discovery is not cross-project authority. Neither federation management nor cross-project dispatch is authorized here.
+
+### Interaction and attention state
+
+- Recording adds another utterance to the current draft, up to the existing 16,000-character instruction bound; overflow keeps the old draft and reports the error. Full off, hide and context/target/model/revision invalidation still discard drafts and revoke authority. An empty title deterministically uses the first 60 UTF-16 units of normalized instruction text without splitting a surrogate pair. The exact title is visible before approval and can be overridden.
+- Optional pause ending uses only local 20 ms energy frames: at least 300 ms of activity above the existing energy threshold, followed by 1.2 seconds of quiet. It invokes the same capture teardown/transcription path as Finish and the 20-second bound. Default remains manual Finish. There is no automatic microphone restart, speech classification, permission grant or dispatch. Real-device threshold suitability is unqualified.
+- Attention is derived from current metadata: unseen `needs-input`, `unknown`, `failed`, then `completed` revisions precede reviewed and active work. Counts distinguish pending questions from the three active/uncertain admission slots. `completed` is presented as Result ready, never verified success.
+- Review and reply fetches bounded full detail, checks source identity/revision and binds the exact fresh worker/revision before presenting the question in the composer. It clears prior draft/audio authority like a target change. Replies never route by title or ordinal. A newer detail read reconciles metadata and invalidates stale audio/drafts immediately; late older list snapshots cannot roll a known revision backward.
+- Reviewed revisions live only in panel memory and clear on context change/remount. They are UI bookkeeping, not durable notification acknowledgements or answers. Polling does not read full text, speak, change the chosen target to another worker, or dispatch. A lost refresh labels the last snapshot stale; visibility return performs only a read refresh, never audio resumption.
+- Exact proposals are consumed before async approval. The latest local receipt distinguishes admission from uncertain delivery, keeps the request/worker identity and exact attempted text, and offers no replay action. Receipt display is not a second ledger; durable backend receipts, hashes and capacity rules remain authoritative.
+- Spoken briefings are deterministic metadata, prioritized by attention, with the workspace and a worker number/title. Numbers reflect the unchanged ledger insertion order and are display aids only. Detail playback includes the same introduction and status before question/result text. The visible prefix includes the introduction within the 1,000-unit limit. An active status preview remains the captured playback text even when reviewed badges change. Unsupported introductions or content fail closed through the existing TTS validator. No worker text is interpreted as control instructions or summarized by a paid model.
+
 ## Recognition
 
 Use `@huggingface/transformers@3.8.1` and quantized `onnx-community/whisper-tiny.en` in a dedicated Web Worker, with the matching ONNX runtime assets. WASM single-thread inference avoids assuming cross-origin isolation or Android WebGPU compatibility. English is the first supported language; do not label this multilingual.
 
 - Explicitly download pinned model/runtime files or import a matching local pack. Never directly execute unchecked CDN imports; verify bytes before blob-module loading. No remote inference fallback.
 - Explicit preparation before microphone activation, with visible download/loading state.
-- Bounded push-to-talk/explicit end-utterance capture; actual sample-rate conversion to mono 16 kHz float PCM.
+- Bounded tap-to-record capture with explicit Finish or optional local pause ending; actual sample-rate conversion to mono 16 kHz float PCM.
 - Release microphone tracks before inference; cancel/hide/context change discards pending audio/results.
 - No raw audio storage, upload, or diagnostic recording.
 - Silence filtering reduces—not eliminates—Whisper hallucinations. Every transcript is editable and requires explicit approval before dispatch.
@@ -63,7 +83,7 @@ Preserve the existing `Command`, `Worker`, receipt and ledger contracts:
 - Same request ID/payload deduplicates; conflicting payload rejects.
 - Never retry uncertain session creation or prompt delivery automatically.
 - Exact workspace/session IDs, revisions and monotonic companion sequences fence follow-ups.
-- Uncertain observation becomes `unknown`, not failed or safe to retry.
+- Uncertain observation becomes `unknown`, not failed or safe to retry. A post-admission companion exception around prompt delivery likewise retains its receipt and becomes `unknown`, whether the host throws before or after accepting delivery. Discarded turn tracking prevents late lifecycle output from settling it; fresh follow-ups reject.
 - `completed` means a settled final agent response, not independently verified task success.
 - Closing voice never cancels published workers.
 - Core `ask_user` and other generic Pi permission dialogs still require the conversation UI. Only `voice_request_input` is bridged.
@@ -82,7 +102,7 @@ The build is approximately 4.72 MB uncompressed, including two Transformers work
 
 First validate the real-host asset URLs/CSP and the Pixel 8 foreground workflow over authenticated HTTPS. Test short English commands, silence, noise, long utterances, cancellation, memory pressure, cache eviction, permission denial, headset routing and screen locking. No background/locked-screen/driving guarantee is made.
 
-Browser-model TTS is implemented under ADR 0002 but is not model/device-qualified; acquire its verified assets separately rather than bundling large weights into the plugin. Only after basic acceptance consider WebGPU acceleration, multilingual packs, conversational routing or wake-word processing. Durable notifications, safe retention tooling and explicit worker control remain separate reliability milestones. Do not expand scope into a native app or paid provider without owner approval.
+Browser-model TTS is implemented under ADR 0002 but is not model/device-qualified; acquire its verified assets separately rather than bundling large weights into the plugin. Only after basic acceptance consider WebGPU acceleration, multilingual packs, conversational routing or wake-word processing. This desk improves explicit foreground orchestration; it does not claim Claude Voice Mode latency or natural-language intent control. Durable notifications, safe retention tooling and explicit worker control remain separate reliability milestones. Do not expand scope into a native app or paid provider without owner approval.
 
 ## Research sources
 

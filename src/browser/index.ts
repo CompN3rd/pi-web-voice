@@ -1,4 +1,6 @@
 import { LitElement, html, css } from "lit";
+import { repeat } from "lit/directives/repeat.js";
+import { appendDictation, attentionOrder, instructionTitle, needsAttention, replyEligible, statusGuidance, statusLabel, targetKey, workerBriefing, workerCounts } from "./voice-desk.js";
 import type { PiWebPlugin, WorkspacePanelContext, JsonValue } from "@jmfederico/pi-web/plugin-api";
 import { text, MAX_MODEL, type Command, type Lease, type Worker, type ModelOption } from "../protocol.ts";
 import { LocalRecognizer } from "./audio.ts";
@@ -14,10 +16,8 @@ import { ttsPrefix } from "./tts-contract.js";
 const SPEECH_CANCELLATION_FAILURE = "Audio teardown is uncertain. Microphone and playback blocked; reload this page to recover.";
 
 const scope = (c?: WorkspacePanelContext) => c ? JSON.stringify([c.machine.id, c.workspace.projectId, c.workspace.id, c.state?.selectedSession?.id]) : "";
-const replyEligible = (w: Worker) => ["needs-input", "completed", "failed"].includes(w.status);
-const targetKey = (w: Worker) => `${w.id}:${w.revision}`;
 export class VoicePanel extends LitElement {
-  static properties = { context: { attribute: false }, status: { state: true }, workers: { state: true }, drafts: { state: true }, transcript: { state: true }, taskTitle: { state: true }, model: { state: true }, target: { state: true }, models: { state: true }, detail: { state: true }, error: { state: true }, approving: { state: true }, selectedPack: { state: true }, selectedTtsPack: { state: true } };
+  static properties = { context: { attribute: false }, status: { state: true }, workers: { state: true }, drafts: { state: true }, transcript: { state: true }, taskTitle: { state: true }, model: { state: true }, target: { state: true }, models: { state: true }, detail: { state: true }, error: { state: true }, approving: { state: true }, selectedPack: { state: true }, selectedTtsPack: { state: true }, finishOnPause: { state: true }, receipt: { state: true } };
   context?: WorkspacePanelContext;
   private status = "Microphone off · prepare local speech or type below";
   private workers: Worker[] = [];
@@ -29,6 +29,12 @@ export class VoicePanel extends LitElement {
   private models: ModelOption[] = [];
   private detail?: Worker;
   private detailSequence = 0;
+  private reviewed = new Map<string, number>();
+  private finishOnPause = false;
+  private dictationBase = "";
+  private receipt?: { command: Command; outcome: "admitted" | "unknown"; workerId?: string };
+  private lastRefreshed = "";
+  private refreshError = false;
   private error = "";
   private approving = false;
   private recognizer?: LocalRecognizer;
@@ -59,7 +65,7 @@ export class VoicePanel extends LitElement {
       this.shutdown(true);
       this.status = "Page hidden · microphone off; speech stop requested. Workers continue.";
     }
-    else this.requestUpdate();
+    else { this.requestUpdate(); this.run(() => this.refresh()); }
   };
   private pageExit = () => this.shutdown();
   private pageReturn = (event: PageTransitionEvent) => { if (event.persisted) this.shutdown(); };
@@ -70,7 +76,30 @@ export class VoicePanel extends LitElement {
     button { cursor:pointer } button:disabled { opacity:.5; cursor:default } button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible { outline:2px solid var(--pi-accent,#5b9aff); outline-offset:2px }
     .primary { border:2px solid var(--pi-accent,#5b9aff) } .danger { border-color:#c66 } section,article { border:1px solid var(--pi-border,#888); border-radius:8px; padding:12px; margin:12px 0 }
     label { display:block; margin:8px 0 } input,textarea,select { width:100% } input[type=checkbox] { width:auto; min-height:auto } textarea { min-height:110px } pre { white-space:pre-wrap; overflow-wrap:anywhere; max-height:24em; overflow:auto }
-    .error { color:var(--pi-error,#e77) } .id { overflow-wrap:anywhere; font-size:.85em } .state { font-weight:600 }
+    .error { color:var(--pi-error,#e77); border-inline-start:3px solid currentColor; padding:12px } .id { overflow-wrap:anywhere; font-size:.85em } .state { font-weight:600 }
+    :host { max-width:840px; padding:clamp(12px,3vw,24px); line-height:1.5; --voice-accent:var(--pi-accent,#4979d3) }
+    h2 { font-size:1.7em; letter-spacing:-.025em } h4 { font-size:1.1em; margin:4px 0 10px } header { margin-bottom:18px }
+    .eyebrow { font-size:.78em; text-transform:uppercase; letter-spacing:.08em; opacity:.8 }
+    .route { margin:6px 0 } .compact { font-size:.88em; margin:8px 0 }
+    section { margin:18px 0; padding:clamp(12px,2vw,20px); border-radius:16px }
+    article { border-radius:12px; margin:10px 0 } .section-heading { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px }
+    .overview { border-block:1px solid var(--pi-border,#888); padding:10px 0; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px }
+    .overview p { margin:4px 0 } .badge { display:inline-block; border:1px solid var(--pi-border,#888); border-radius:100px; padding:4px 10px; font-size:.8em }
+    .composer { border-color:var(--voice-accent) } .capture { border-block:1px solid var(--pi-border,#888); margin:14px 0; padding:8px 0 }
+    .primary { border-color:var(--voice-accent); background:color-mix(in srgb,var(--voice-accent) 12%,transparent); font-weight:600 }
+    .microphone { flex:1; min-height:56px } .microphone[aria-pressed=true] { border-color:#c66; background:color-mix(in srgb,#c66 15%,transparent) }
+    .check { display:flex; align-items:center; gap:10px; min-height:44px } .check input { flex-shrink:0; width:20px; height:20px }
+    .task-options { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px }
+    .question,.receipt { border-inline-start:3px solid var(--voice-accent); padding:8px 12px; margin:12px 0 }
+    .proposal,.detail { border:2px solid var(--voice-accent) } .unreviewed { border-inline-start:4px solid var(--voice-accent) }
+    .worker-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,270px),1fr)); gap:12px }
+    .worker-grid article { min-width:0; margin:0; display:flex; flex-direction:column; align-items:flex-start }
+    .worker-grid .toolbar { margin-top:auto; padding-top:12px } .setup { border:1px solid var(--pi-border,#888); border-radius:12px; padding:12px; margin:12px 0 }
+    summary { cursor:pointer; min-height:44px; align-content:center } summary:focus-visible { outline:2px solid var(--voice-accent) }
+    pre { font:inherit; line-height:1.55; border-radius:8px; padding:8px; background:color-mix(in srgb,var(--voice-accent) 5%,transparent) }
+    button { transition:background .12s } button:hover:not(:disabled) { background:color-mix(in srgb,var(--voice-accent) 15%,transparent) }
+    @media(max-width:480px) { .task-options { grid-template-columns:1fr; gap:0 } .toolbar>button { flex-grow:1 } .capture .toolbar>button:first-child { flex-basis:100% } }
+    @media(prefers-reduced-motion:reduce) { button { transition:none } }
   `;
   connectedCallback() {
     super.connectedCallback();
@@ -88,7 +117,7 @@ export class VoicePanel extends LitElement {
     const key = scope(this.context);
     if (key !== this.lastScope) {
       this.shutdown(); this.activeContext = this.context; this.lastScope = key;
-      this.workers = []; this.models = []; this.taskTitle = ""; this.model = ""; this.target = "new"; this.error = "";
+      this.workers = []; this.models = []; this.reviewed.clear(); this.receipt = undefined; this.lastRefreshed = ""; this.refreshError = false; this.taskTitle = ""; this.model = ""; this.target = "new"; this.error = "";
       this.run(() => this.refresh());
     }
     if (!this.speech && this.isConnected && !document.hidden) {
@@ -117,28 +146,37 @@ export class VoicePanel extends LitElement {
     try {
       const value = await this.request("list");
       if (!Array.isArray(value)) throw new Error("Invalid worker list");
-      this.workers = value as unknown as Worker[];
-      if (this.playback && [...this.playback.revisions].some(([id, revision]) => {
-        const current = this.workers.find(w => w.id === id);
-        return !current || current.revision > revision;
-      })) this.stopPlayback();
-      const detail = this.detail;
-      if (detail) {
-        const current = this.workers.find(w => w.id === detail.id);
-        if (!current || current.revision > detail.revision) this.closeDetail();
-      }
-      if (this.target && this.target !== "new" && !this.replyTarget()) {
-        this.shutdown(); this.target = "";
-        this.status = "Worker revision changed · draft discarded. Select an exact target again.";
-      }
-    } finally { if (generation === this.generation) this.refreshing = false; }
+      this.acceptWorkers(value as unknown as Worker[]);
+      this.lastRefreshed = new Date().toLocaleTimeString(); this.refreshError = false;
+    } catch (error) { if (generation === this.generation) this.refreshError = true; throw error; }
+    finally { if (generation === this.generation) { this.refreshing = false; this.requestUpdate(); } }
+  }
+  private acceptWorkers(incoming: Worker[]) {
+    // A list started before a detail read can arrive later. Never roll a known revision back.
+    this.workers = incoming.map(worker => {
+      const known = this.workers.find(w => w.id === worker.id);
+      return known && known.revision > worker.revision ? known : worker;
+    });
+    if (this.playback && [...this.playback.revisions].some(([id, revision]) => {
+      const current = this.workers.find(w => w.id === id);
+      return !current || current.revision > revision;
+    })) this.stopPlayback();
+    const detail = this.detail;
+    if (detail) {
+      const current = this.workers.find(w => w.id === detail.id);
+      if (!current || current.revision > detail.revision) this.closeDetail();
+    }
+    if (this.target && this.target !== "new" && !this.replyTarget()) {
+      this.shutdown(); this.target = "";
+      this.status = "Worker revision changed · draft discarded. Select an exact target again.";
+    }
   }
   private closeDetail() {
     this.detailSequence++;
     this.detail = undefined;
     if (this.playback?.kind === "detail") this.stopPlayback();
   }
-  private async readDetail(worker: Worker) {
+  private async readDetail(worker: Worker, reply = false) {
     const sequence = ++this.detailSequence;
     if (this.playback?.kind === "detail") this.stopPlayback();
     try {
@@ -153,10 +191,35 @@ export class VoicePanel extends LitElement {
       }
       // The user may have started playback of the old detail while this read was pending.
       if (this.playback?.kind === "detail") this.stopPlayback();
+      // Read may return a newer revision than list. Reconcile metadata before binding a reply.
+      this.acceptWorkers(this.workers.map(w => w.id === detail.id ? { ...detail, text: "", question: detail.question ? "Input requested; read worker for details." : undefined } : w));
+      if (reply) {
+        if (!replyEligible(detail)) throw new Error("Worker is no longer ready for a reply. Inspect its conversation.");
+        this.changeTarget(targetKey(detail));
+      }
       this.detail = detail;
+      const generation = this.generation;
+      await this.updateComplete;
+      if (this.current(generation) && this.detail === detail) {
+        if (reply) await this.focusComposer();
+        else this.renderRoot.querySelector<HTMLElement>(".detail h3")?.focus();
+      }
     } catch (error) {
       if (sequence === this.detailSequence) throw error;
     }
+  }
+  private async focusComposer() {
+    const generation = this.generation;
+    await this.updateComplete;
+    if (this.current(generation)) this.renderRoot.querySelector<HTMLElement>(".composer h3")?.focus();
+  }
+  private markReviewed(worker: Worker) {
+    if (this.workers.some(w => targetKey(w) === targetKey(worker))) this.reviewed.set(worker.id, worker.revision);
+    this.requestUpdate();
+  }
+  private async nextAttention() {
+    const worker = attentionOrder(this.workers, this.reviewed).find(w => needsAttention(w) && this.reviewed.get(w.id) !== w.revision);
+    if (worker) await this.readDetail(worker);
   }
   private revoke() {
     this.permissionEpoch++;
@@ -175,7 +238,7 @@ export class VoicePanel extends LitElement {
     // The page coordinator owns unfinished teardown even after this wrapper is gone.
     speech?.setEnabled(false);
     if (speech) void speech.dispose().finally(() => this.requestUpdate());
-    this.transcript = ""; this.drafts = []; this.approving = false;
+    this.transcript = ""; this.dictationBase = ""; this.drafts = []; this.approving = false;
     this.status = "Microphone off · prepare local speech again. Workers continue.";
   }
   private async inspectPack(kind: SpeechPackKind) {
@@ -246,7 +309,9 @@ export class VoicePanel extends LitElement {
       status: message => { if (this.current(generation) && this.recognizer === recognizer) { this.status = message; this.requestUpdate(); } },
       transcript: message => {
         if (this.current(generation) && this.recognizer === recognizer) {
-          this.transcript = message; this.drafts = [];
+          try { this.transcript = appendDictation(this.dictationBase, message); }
+          catch (error) { this.showError(error); }
+          this.dictationBase = ""; this.drafts = [];
           this.status = "Untrusted local transcript · edit and propose; nothing submitted";
         }
       },
@@ -273,8 +338,8 @@ export class VoicePanel extends LitElement {
       const worker = this.replyTarget();
       if (!target || (target !== "new" && (!worker || !replyEligible(worker)))) throw new Error("Select a new task or an exact settled worker revision first.");
       if (!this.cancellationSafe) throw new Error(SPEECH_CANCELLATION_FAILURE);
-      this.revoke(); this.transcript = ""; this.drafts = []; this.playback = undefined;
-      await recognizer.start();
+      this.revoke(); this.dictationBase = this.transcript; this.drafts = []; this.playback = undefined;
+      await recognizer.start({ finishOnPause: this.finishOnPause });
     } catch (error) {
       if (this.recognizer === recognizer) this.status = "Microphone off · local capture failed; prepare explicitly to retry.";
       throw error;
@@ -302,10 +367,17 @@ export class VoicePanel extends LitElement {
       lease = await this.requestAllowance();
       if (!this.current(generation, epoch)) return;
       attempted = true;
-      await this.request("execute", { command, token: lease.token });
+      const admitted = await this.request("execute", { command, token: lease.token }) as unknown as Worker;
+      this.receipt = { command, outcome: "admitted", workerId: admitted.id };
       this.transcript = "";
+      if (command.kind === "start") this.taskTitle = "";
       await this.refresh();
     } catch (error) {
+      if (attempted && this.current(generation, epoch) && this.receipt?.command !== command) {
+        this.receipt = { command, outcome: "unknown", workerId: command.workerId ?? command.requestId };
+        this.transcript = "";
+      }
+      if (this.receipt?.command === command && this.receipt.outcome === "admitted") throw new Error("Instruction admitted, but status refresh failed. Inspect workers; do not resubmit. " + (error instanceof Error ? error.message : String(error)));
       if (attempted) throw new Error("Instruction outcome may be unknown. Inspect workers/conversation; do not blindly resubmit. " + (error instanceof Error ? error.message : String(error)));
       throw error;
     } finally {
@@ -317,13 +389,14 @@ export class VoicePanel extends LitElement {
     event.preventDefault();
     this.run(() => {
       if (this.busy || this.approving) return;
+      if (workerCounts(this.workers, this.reviewed).active >= 3) throw new Error("All three active or uncertain worker slots are occupied. Wait or inspect uncertain conversations; do not resubmit them.");
       const prompt = text(this.transcript, "instruction");
       const worker = this.replyTarget();
       if (this.target !== "new" && (!worker || !replyEligible(worker))) throw new Error("Select an exact settled worker revision first.");
       this.revoke();
       this.drafts = [worker
         ? { kind: "reply", requestId: crypto.randomUUID(), workerId: worker.id, expectedRevision: worker.revision, prompt }
-        : { kind: "start", requestId: crypto.randomUUID(), title: text(this.taskTitle, "title", 100), prompt, ...(this.model.trim() ? { model: text(this.model, "model", MAX_MODEL) } : {}) }];
+        : { kind: "start", requestId: crypto.randomUUID(), title: text(this.taskTitle.trim() || instructionTitle(prompt), "title", 100), prompt, ...(this.model.trim() ? { model: text(this.model, "model", MAX_MODEL) } : {}) }];
     });
   }
   private run(action: () => unknown | Promise<unknown>) {
@@ -363,7 +436,7 @@ export class VoicePanel extends LitElement {
     const detail = this.detail;
     if (kind === "detail" && !detail) return;
     const source = kind === "detail" ? [detail!] : this.workers;
-    const value = kind === "detail" ? detail!.question ?? detail!.text : source.map(w => `${w.title}: ${w.status}.`).join(" ");
+    const value = kind === "detail" ? this.detailSpeech(detail!) : this.briefing();
     const job = this.playback = { kind, text: ttsPrefix(value), revisions: new Map(source.map(w => [w.id, w.revision])), detailSequence: this.detailSequence };
     const generation = this.generation;
     this.error = "";
@@ -372,26 +445,108 @@ export class VoicePanel extends LitElement {
       if (this.current(generation) && this.playback === job) this.error = "Local playback did not complete. No fallback or automatic replay was attempted.";
     }).finally(() => { if (this.playback === job) this.playback = undefined; this.requestUpdate(); });
   }
+  private workerNumber(worker: Worker) { return this.workers.findIndex(w => w.id === worker.id) + 1; }
+  private briefing() { return `${this.context?.workspace.label ?? "Selected workspace"}. ${workerBriefing(this.workers, this.reviewed)}`; }
+  private detailSpeech(worker: Worker) {
+    return `${this.context?.workspace.label ?? "Selected workspace"}. Worker ${this.workerNumber(worker)}, ${worker.title}. ${statusLabel[worker.status]}. ${worker.question ?? worker.text}`;
+  }
+  private openConversation(worker: Worker) {
+    const c = this.context;
+    if (c && worker.sessionId) return c.navigate({ machineId: c.machine.id, projectId: c.workspace.projectId, workspaceId: c.workspace.id, sessionId: worker.sessionId, view: "chat" });
+  }
   render() {
-    const c = this.context; const worker = this.replyTarget();
+    const c = this.context, worker = this.replyTarget(), detail = this.detail;
     const recording = this.recognizer?.state === "recording";
-    const result = this.detail?.question ?? this.detail?.text ?? "";
-    const statuses = this.workers.map(w => `${w.title}: ${w.status}.`).join(" ");
+    const microphoneState = !this.cancellationSafe ? "Microphone state uncertain · reload required"
+      : this.stopping ? "Stopping audio · microphone state not yet confirmed"
+      : this.recognizer?.state === "starting" ? "Opening microphone"
+      : recording ? "Microphone on" : "Microphone off";
+    const result = detail?.question ?? detail?.text ?? "";
+    const statuses = this.playback?.kind === "status" ? this.playback.text : this.briefing();
+    const counts = workerCounts(this.workers, this.reviewed);
+    const ordered = attentionOrder(this.workers, this.reviewed);
+    const canSpeak = this.cancellationSafe && !this.stopping && !this.busy && !this.cacheAction && this.speech?.ready && this.speech.enabled;
     return html`
-      <h2>Local voice <small>· experimental</small></h2>
-      <p><strong>${c?.machine.name} / ${c?.state?.selectedProject?.name ?? c?.workspace.projectId} / ${c?.workspace.label}</strong></p>
-      <p class="muted">Pixel 8 phone-browser speech · English only. Not driving-validated. Foreground only: hiding, closing, changing context or turning off stops microphone work and requests speech cancellation, not worker cancellation. No cloud recognition fallback.</p>
-      <section aria-label="Local speech controls">
-        <p class="state" role="status">${this.cancellationSafe ? this.status : SPEECH_CANCELLATION_FAILURE}</p>
-        <p>Speech needs approximately 65 MB plus cache overhead. Prepare uses verified cached files only. Download explicitly contacts Hugging Face/CDN and jsDelivr without credentials or referrer; these hosts see download metadata, never microphone audio. Or import a matching .pivoice file locally. No additional host routes or paid inference service.</p>
-        <p>Recognition acquisition: ${this.packBytes("recognition").toLocaleString()} bytes, excluding cache overhead. Download size is not a RAM estimate. Preparing recognition releases an idle TTS model; typed drafts and workers are preserved.</p>
-        <p>All acquisition uses phone storage/memory and never opens the microphone. Missing files fail closed; there is no automatic download or cloud recognition fallback.</p>
-        <div class="toolbar">
-          <button class="primary" ?disabled=${this.preparationBlocked || this.speech?.state === "preparing" || this.recognizer?.ready} @click=${() => this.run(() => this.prepare())}>Prepare local English speech pack</button>
+      <header>
+        <div class="eyebrow">Local voice · experimental</div>
+        <h2>Your voice desk</h2>
+        <p class="route"><strong>${c?.machine.name} / ${c?.state?.selectedProject?.name ?? c?.workspace.projectId} / ${c?.workspace.label}</strong></p>
+        <p class="muted compact">English speech on this device. Selected workspace only. Foreground only; not driving-validated.</p>
+      </header>
+      <nav class="overview" aria-label="Workspace attention">
+        <p role="status" aria-live="polite"><strong>${counts.attention} updates to review</strong> · ${counts.questions} need an answer · ${counts.active}/3 active or uncertain</p>
+        <button ?disabled=${!counts.attention} @click=${() => this.run(() => this.nextAttention())}>Review next update</button>
+      </nav>
+      <section class="composer" aria-label="Exact instruction">
+        <div class="section-heading"><h3 tabindex="-1">${worker ? `Reply to worker ${this.workerNumber(worker)}` : "What shall we work on?"}</h3><span class="badge" role="status">${microphoneState}</span></div>
+        <form @submit=${(event: SubmitEvent) => this.propose(event)}>
+          <label>Instruction target<select .value=${this.target} @change=${(event: Event) => this.changeTarget((event.target as HTMLSelectElement).value)}>
+            <option value="">Select an exact target</option><option value="new">New task · independent worker</option>
+            ${this.workers.map(w => html`<option value=${targetKey(w)} ?disabled=${!replyEligible(w)}>Reply: ${w.title} · worker ${this.workerNumber(w)} · ${w.id} · revision ${w.revision} · ${w.status}</option>`)}
+          </select></label>
+          <p class="muted compact">Changing target or model discards the unsent draft and stops audio.</p>
+          ${worker ? html`<p class="id">Reply to ${worker.id} · session ${worker.sessionId} · revision ${worker.revision} · existing model ${worker.model}</p>
+            ${detail && targetKey(detail) === targetKey(worker) && detail.question ? html`<aside class="question"><strong>Answering this saved question</strong><pre>${detail.question}</pre></aside>` : html`<button type="button" @click=${() => this.run(() => this.readDetail(worker))}>Read selected worker context</button>`}` : ""}
+          <div class="capture" aria-label="Local speech controls">
+            <p class="state" role="status">${this.cancellationSafe ? this.status : SPEECH_CANCELLATION_FAILURE}</p>
+            <div class="toolbar">
+              <button type="button" ?disabled=${this.preparationBlocked || this.speech?.state === "preparing" || this.recognizer?.ready} @click=${() => this.run(() => this.prepare())}>Prepare local English speech pack</button>
+              <button type="button" class="primary microphone" aria-pressed=${recording ? "true" : "false"} ?disabled=${!this.cancellationSafe || this.stopping || this.cacheAction || this.approving || !!this.captureTicket || (!recording && !this.recognizer?.ready) || !this.target || (!!worker && !replyEligible(worker))} @click=${() => this.run(() => this.toggleRecording())}>${recording ? "Finish recording" : "Start recording"}</button>
+              <button type="button" class="danger" @click=${() => this.shutdown()}>Cancel / voice off</button>
+            </div>
+            <label class="check"><input type="checkbox" .checked=${this.finishOnPause} ?disabled=${this.busy} @change=${(event: Event) => { this.finishOnPause = (event.target as HTMLInputElement).checked; }}>Finish on a pause · draft only</label>
+            <p class="muted compact">${this.transcript ? "Recording adds another thought to this draft. " : ""}Up to 20 seconds. ${this.finishOnPause ? "After speech energy, 1.2 seconds of quiet ends capture; noise can interfere. " : "Tap Finish when done. "}Nothing sends until exact approval.</p>
+          </div>
+          <label>Editable transcript / task text<textarea name="prompt" required maxlength="16000" placeholder=${worker ? "Your answer or follow-up…" : "Speak or type a task. Each worker keeps its own context."} ?disabled=${this.busy || this.approving} .value=${this.transcript} @input=${(event: Event) => { this.transcript = (event.target as HTMLTextAreaElement).value; this.drafts = []; this.revoke(); }}></textarea></label>
+          ${!worker ? html`<div class="task-options">
+            <label>Title<input name="title" ?disabled=${this.approving} maxlength="100" placeholder="Optional · suggested from your instruction" .value=${this.taskTitle} @input=${(event: Event) => { this.taskTitle = (event.target as HTMLInputElement).value; this.drafts = []; this.revoke(); }}></label>
+            <label>Worker model (empty = Pi default)<input name="model" list="voice-models" maxlength="512" .value=${this.model} @input=${(event: Event) => this.changeModel((event.target as HTMLInputElement).value)}><datalist id="voice-models">${this.models.map(m => html`<option value=${m.id}>${m.name}</option>`)}</datalist></label>
+          </div>` : ""}
+          <button class="primary" type="submit" ?disabled=${this.busy || this.approving || counts.active >= 3 || !this.transcript.trim() || !this.target || (!!worker && !replyEligible(worker))}>Propose exact instruction</button>
+          ${counts.active >= 3 ? html`<p class="state">All three active or uncertain slots are occupied. Keep drafting, or inspect uncertain conversations. Never resubmit uncertain work.</p>` : ""}
+          <p class="muted compact">Review next. Approved text uses the worker's normal provider costs and tool permissions, not a sandbox.</p>
+        </form>
+        ${this.drafts.map(d => html`<article class="proposal" aria-label="Exact proposal"><h3>Proposed ${d.kind === "start" ? d.title : "follow-up"} · NOT submitted</h3>
+          <p>${c?.machine.name} / ${c?.workspace.projectId} / ${c?.workspace.label}</p>
+          <p class="id">${d.workerId ? `Reply to ${d.workerId} · session ${worker?.sessionId} · revision ${d.expectedRevision} · existing model ${worker?.model}` : `New worker · ${d.model ?? "Pi default"}`} · request ${d.requestId}</p><pre>${d.prompt}</pre>
+          <div class="toolbar"><button class="primary" ?disabled=${this.busy || this.approving} @click=${() => this.run(() => this.execute(d))}>Approve exact instruction</button><button @click=${() => { this.drafts = []; this.revoke(); }}>Dismiss</button></div></article>`)}
+        ${this.approving ? html`<p role="status">Approval pending · no automatic retries</p>` : ""}
+        ${this.receipt ? html`<aside class="receipt" aria-label="Instruction receipt"><p role="status"><strong>${this.receipt.outcome === "admitted" ? "Instruction admitted" : "Delivery uncertain"}</strong> · ${this.receipt.outcome === "admitted" ? "Admission is not delivery or task success. Workers continue independently." : "Inspect workers and conversations. Do not resubmit this instruction."}</p><p class="id">Request ${this.receipt.command.requestId} · worker ${this.receipt.workerId}</p><details><summary>Exact attempted instruction</summary><pre>${this.receipt.command.prompt}</pre></details></aside>` : ""}
+      </section>
+      ${this.error ? html`<p class="error" role="alert">${this.error}</p>` : ""}
+      <section aria-label="Worker attention" class="workers">
+        <div class="section-heading"><h3>Workers & updates</h3><button @click=${() => this.run(() => this.refresh())}>Refresh status</button></div>
+        <p class="muted compact">${this.refreshError ? "Status unavailable · showing the last snapshot, not live state." : this.lastRefreshed ? `Last checked ${this.lastRefreshed} · checks every 5 seconds while visible` : "Checking workspace…"}</p>
+        ${detail ? html`<article class="detail" aria-label="Worker detail"><div class="eyebrow">Worker ${this.workerNumber(detail)} · ${statusLabel[detail.status]}</div><h3 tabindex="-1">${detail.title}</h3><p class="id">${detail.id} · session ${detail.sessionId} · revision ${detail.revision} · ${detail.model}</p><pre>${result || "No saved text yet. Open the conversation for live work."}</pre>
+          <p>${statusGuidance[detail.status]}</p>
+          <div class="toolbar">
+            <button class="primary" ?disabled=${!replyEligible(detail)} @click=${() => this.run(() => this.readDetail(detail, true))}>Reply to this worker</button>
+            <button ?disabled=${!canSpeak || !result} @click=${() => this.speak("detail")}>Speak result / question prefix</button>
+            <button @click=${() => this.markReviewed(detail)}>Mark reviewed</button><button @click=${() => this.closeDetail()}>Close detail</button>
+          </div>
+          <details><summary>Exact result playback prefix · ${ttsPrefix(this.detailSpeech(detail)).length} characters</summary><pre>${ttsPrefix(this.detailSpeech(detail))}</pre></details>
+          <p class="muted compact">${this.detailSpeech(detail).length > 1000 ? "Playback is truncated: reads up to the first 1000 characters. Full text is shown above." : "Playback includes workspace and worker identity, at most 1000 characters."}</p>
+        </article>` : ""}
+        <div class="worker-grid">${this.workers.length ? repeat(ordered, w => w.id, w => html`<article aria-label=${`Worker ${this.workerNumber(w)}: ${w.title}`} class=${needsAttention(w) && this.reviewed.get(w.id) !== w.revision ? "unreviewed" : ""}>
+          <div class="eyebrow">Worker ${this.workerNumber(w)} ${needsAttention(w) && this.reviewed.get(w.id) !== w.revision ? "· New update" : ""}</div><h4>${w.title}</h4><span class="badge">${statusLabel[w.status]}</span><p class="muted compact">${statusGuidance[w.status]}</p>
+          <details><summary>Exact worker identity</summary><p class="id">${w.id} · session ${w.sessionId || "not yet recorded"} · revision ${w.revision} · ${w.model}</p></details>
+          <div class="toolbar">${w.status === "needs-input" ? html`<button class="primary" @click=${() => this.run(() => this.readDetail(w, true))}>Review and reply</button>` : ""}<button @click=${() => this.run(() => this.readDetail(w))}>Read text / question</button><button ?disabled=${!w.sessionId} @click=${() => this.run(() => this.openConversation(w))}>Open conversation</button></div>
+        </article>`) : html`<p>No tracked workers in this workspace.</p>`}</div>
+        <p class="muted compact">Reviewed badges are local to this panel, not worker acknowledgements. Core ask_user and permission dialogs still need Open conversation. Closing voice never cancels workers.</p>
+      </section>
+      <section aria-label="Model speech playback">
+        <h3>Listen · English Heart</h3>
+        <p role="status" class=${this.cancellationSafe ? "state" : "error"}>${this.speechMessage(this.speech?.status)}</p>
+        <div class="toolbar"><button ?disabled=${this.preparationBlocked || this.speechBusy || this.speech?.ready} @click=${() => this.run(() => this.prepareTts())}>Prepare cached TTS pack</button><button ?disabled=${!canSpeak || !this.workers.length} @click=${() => this.speak("status")}>Speak worker status</button><button @click=${() => this.stopPlayback()}>Stop speaking</button></div>
+        <label class="check"><input type="checkbox" aria-label="Enable English Heart playback" .checked=${this.speech?.enabled ?? false} ?disabled=${!this.cancellationSafe || this.stopping} @change=${(event: Event) => { this.speech?.setEnabled((event.target as HTMLInputElement).checked); this.requestUpdate(); }}>Enable English Heart playback · preparation alone never speaks</label>
+        <details><summary>Exact status playback prefix · ${ttsPrefix(statuses).length} characters</summary><pre>${ttsPrefix(statuses)}</pre><p>Status is a captured revision snapshot, not a live claim.</p></details>
+        <p class="muted compact">No automatic announcements. Preparing playback releases idle recognition; Stop releases TTS weights. Prepare explicitly to switch back. No OS/cloud/alternate voice fallback.</p>
+      </section>
+      <details class="setup" aria-label="Speech setup"><summary>Speech setup & storage</summary>
+        <p>First use: explicitly download a pinned pack or import a .pivoice file. Later, use cached preparation. Preparation never records or speaks. Only one heavyweight speech runtime is resident per document; cached files and typed drafts survive handoff.</p>
+        <section aria-label="Recognition pack"><h3>Recognition · Whisper English</h3>
+          <p>Approximately 65 MB (${this.packBytes("recognition").toLocaleString()} bytes), not a RAM estimate. Downloads contact Hugging Face/CDN and jsDelivr without credentials/referrer. These hosts see download metadata, never microphone audio. Cached preparation and import never silently download.</p>
           <button ?disabled=${this.preparationBlocked || this.speech?.state === "preparing" || this.recognizer?.ready} @click=${() => this.run(() => this.prepare({ source: "download" }))}>Download pinned English speech pack · ~65 MB</button>
-          <button class="primary" aria-pressed=${recording ? "true" : "false"} ?disabled=${!this.cancellationSafe || this.stopping || this.cacheAction || this.approving || !!this.captureTicket || (!recording && !this.recognizer?.ready) || !this.target || (!!worker && !replyEligible(worker))} @click=${() => this.run(() => this.toggleRecording())}>${recording ? "Finish recording" : "Start recording"}</button>
-          <button class="danger" @click=${() => this.shutdown()}>Cancel / voice off</button>
-        </div>
         <button aria-label="Import local speech pack (.pivoice)" ?disabled=${this.preparationBlocked || this.speech?.state === "preparing" || this.recognizer?.ready} @click=${() => this.choosePack("recognition")}>Choose recognition pack (.pivoice)</button>
         ${this.selectedPack ? html`<p>Selected ${this.selectedPack.name} (${this.selectedPack.size.toLocaleString()} bytes). Selecting a file has not imported it.</p>
           <button ?disabled=${this.preparationBlocked || this.speech?.state === "preparing" || this.recognizer?.ready} @click=${() => {
@@ -400,53 +555,22 @@ export class VoicePanel extends LitElement {
           }}>Import selected speech pack</button>` : ""}
         <p>${this.cacheDescription("recognition")}</p><button @click=${() => this.run(() => this.inspectPack("recognition"))}>Inspect recognition cache</button><button ?disabled=${!this.cancellationSafe || this.stopping || this.cacheAction || this.approving} @click=${() => this.run(() => this.clearPack("recognition"))}>Clear recognition cache</button>
         <p>Maximum 20 seconds per recording. Finish only creates an untrusted, editable draft; it never sends an instruction. Cancel requires explicit preparation again.</p>
-      </section>
-      <section aria-label="Exact instruction">
-        <h3>Review every instruction</h3>
-        <p>Approved text goes to an ordinary Pi worker with its existing provider costs and tool permissions, not a sandbox. No hands-free permission or spoken approval.</p>
-        <form @submit=${(event: SubmitEvent) => this.propose(event)}>
-          <label>Instruction target<select .value=${this.target} @change=${(event: Event) => this.changeTarget((event.target as HTMLSelectElement).value)}>
-            <option value="">Select an exact target</option><option value="new">New task</option>
-            ${this.workers.map(w => html`<option value=${targetKey(w)} ?disabled=${!replyEligible(w)}>Reply: ${w.title} · ${w.id} · revision ${w.revision} · ${w.status}</option>`)}
-          </select></label>
-          ${worker ? html`<p class="id">Reply to ${worker.id} · revision ${worker.revision} · existing model ${worker.model}</p>` : html`<label>Title<input name="title" ?disabled=${this.approving} required maxlength="100" .value=${this.taskTitle} @input=${(event: Event) => { this.taskTitle = (event.target as HTMLInputElement).value; this.drafts = []; this.revoke(); }}></label>`}
-          <label>Editable transcript / task text<textarea name="prompt" required maxlength="16000" ?disabled=${this.busy || this.approving} .value=${this.transcript} @input=${(event: Event) => { this.transcript = (event.target as HTMLTextAreaElement).value; this.drafts = []; this.revoke(); }}></textarea></label>
-          ${!worker ? html`<label>Worker model (empty = Pi default)<input name="model" list="voice-models" maxlength="512" .value=${this.model} @input=${(event: Event) => this.changeModel((event.target as HTMLInputElement).value)}><datalist id="voice-models">${this.models.map(m => html`<option value=${m.id}>${m.name}</option>`)}</datalist></label>` : ""}
-          <button type="submit" ?disabled=${this.busy || this.approving || !this.target || (!!worker && !replyEligible(worker))}>Propose exact instruction</button>
-        </form>
-        <details><summary>Text fallback and worker model catalog</summary><p>Typing needs no speech pack, microphone or playback voice. Model selection is independent of speech. The catalog requires a selected hosted conversation with the companion enabled; no hidden session is created.</p>
-          <button @click=${() => this.run(async () => { const id = c?.state?.selectedSession?.id; if (!id) throw new Error("Select a hosted conversation first, or enter exact provider/model ID manually."); this.models = await this.request("models", { sessionId: id }) as unknown as ModelOption[]; })}>Load available models</button>
-        </details>
-        ${this.approving ? html`<p role="status">Approval pending · no automatic retries</p>` : ""}
-      </section>
-      ${this.error ? html`<p class="error" role="alert">${this.error}</p>` : ""}
-      ${this.drafts.map(d => html`<article aria-label="Exact proposal"><h3>Proposed ${d.kind === "start" ? d.title : "follow-up"} · NOT submitted</h3><p class="id">${d.workerId ? `Reply to ${d.workerId} · revision ${d.expectedRevision} · existing model ${worker?.model}` : `New worker · ${d.model ?? "Pi default"}`} · request ${d.requestId}</p><pre>${d.prompt}</pre><div class="toolbar"><button class="primary" ?disabled=${this.busy || this.approving} @click=${() => this.run(() => this.execute(d))}>Approve exact instruction</button><button @click=${() => { this.drafts = []; this.revoke(); }}>Dismiss</button></div></article>`)}
-      <section aria-label="Model speech playback">
-        <h3>Local model playback · English Heart</h3>
-        <p>Kokoro af_heart runs in this browser at normal speed. No OS, Google/system, cloud speech or alternate-voice fallback. Preparing this pack releases idle recognition resources, preserving typed drafts and workers. Only one speech model is resident in this page; other tabs are not controlled.</p>
-        <p>TTS acquisition: ${this.packBytes("tts").toLocaleString()} bytes, excluding cache overhead. This includes a separate runtime copy and is not a RAM estimate. Download contacts pinned Hugging Face/CDN and jsDelivr assets without credentials/referrer. Import and cached preparation make no distribution requests.</p>
-        <p role="status" class=${this.cancellationSafe ? "" : "error"}>${this.speechMessage(this.speech?.status)}</p>
-        <div class="toolbar">
-          <button ?disabled=${this.preparationBlocked || this.speechBusy || this.speech?.ready} @click=${() => this.run(() => this.prepareTts())}>Prepare cached TTS pack</button>
-          <button ?disabled=${this.preparationBlocked || this.speechBusy || this.speech?.ready} @click=${() => this.run(() => this.prepareTts({ source: "download" }))}>Download pinned TTS pack</button>
-          <button aria-label="Import TTS pack (.pivoice)" ?disabled=${this.preparationBlocked || this.speechBusy || this.speech?.ready} @click=${() => this.choosePack("tts")}>Choose TTS pack (.pivoice)</button>
-        </div>
-        ${this.selectedTtsPack ? html`<p>Selected TTS file ${this.selectedTtsPack.name} (${this.selectedTtsPack.size.toLocaleString()} bytes). Selecting a file performs no import.</p><button ?disabled=${this.preparationBlocked || this.speechBusy || this.speech?.ready} @click=${() => {
-          const file = this.selectedTtsPack; this.selectedTtsPack = undefined;
-          if (file) this.run(() => this.prepareTts({ source: "import", file }));
-        }}>Import selected TTS pack</button>` : ""}
-        <label><input type="checkbox" aria-label="Enable English Heart playback" .checked=${this.speech?.enabled ?? false} ?disabled=${!this.cancellationSafe || this.stopping} @change=${(event: Event) => { this.speech?.setEnabled((event.target as HTMLInputElement).checked); this.requestUpdate(); }}>Enable English Heart playback · preparation alone never speaks</label>
-        <p>English-only; unsupported symbols/scripts, signed numbers/ranges, numeric spans over 15 digits and words/identifiers over 32 characters are rejected before audio. Other code, names and numbers may still be pronounced incorrectly. Playback reads the explicitly labelled prefix, not the entire result. Text is never interpreted as commands.</p>
-        <div class="toolbar"><button ?disabled=${!this.cancellationSafe || this.stopping || this.busy || this.cacheAction || !this.speech?.ready || !this.speech.enabled || !statuses} @click=${() => this.speak("status")}>Speak worker status</button><button @click=${() => this.stopPlayback()}>Stop speaking</button></div>
-        <p>Stop cancels preparation/synthesis/playback and releases TTS weights; prepare explicitly to speak again. It does not clear drafts or stop coding workers.</p>
-        <details><summary>Exact status playback prefix · ${ttsPrefix(statuses).length} characters</summary><pre>${ttsPrefix(statuses)}</pre><p>Status is a captured revision snapshot, not a live claim.</p></details>
-        <p>${this.cacheDescription("tts")}</p><button @click=${() => this.run(() => this.inspectPack("tts"))}>Inspect TTS cache</button><button ?disabled=${!this.cancellationSafe || this.stopping || this.cacheAction || this.approving} @click=${() => this.run(() => this.clearPack("tts"))}>Clear TTS cache</button>
-        <details><summary>Local TTS diagnostics</summary><pre aria-label="Local TTS diagnostics output">${JSON.stringify({ pack: __VOICE_PACKS__.tts.cacheName, state: this.speech?.state ?? "unprepared", enabled: this.speech?.enabled ?? false, safe: this.cancellationSafe, stopping: this.stopping, checkedBytes: this.speech?.status.progress?.checkedBytes ?? 0 }, null, 2)}</pre><p>No task text, phonemes or audio is included or forwarded. Reload the full page when upgrading from OS-synthesis builds.</p></details>
-      </section>
-      <section><h3>Workers</h3><button @click=${() => this.run(() => this.refresh())}>Refresh status</button><p>Completion means the agent turn settled, not independent verification. Generic Pi forms/dialogs still require the conversation UI.</p>
-        ${this.workers.length ? this.workers.map(w => html`<article><strong>${w.title}</strong> · <span class="state">${w.status}</span><p class="id">${w.id} · revision ${w.revision} · ${w.model}</p><div class="toolbar"><button @click=${() => this.run(() => this.readDetail(w))}>Read text / question</button><button ?disabled=${!w.sessionId} @click=${() => this.run(() => c?.navigate({ machineId: c.machine.id, projectId: c.workspace.projectId, workspaceId: c.workspace.id, sessionId: w.sessionId, view: "chat" }))}>Open conversation</button></div></article>`) : html`<p>No tracked workers in this workspace.</p>`}
-        ${this.detail ? html`<article><h3>${this.detail.title}</h3><pre>${result}</pre>${result.length > 1000 ? html`<details><summary>Exact result playback prefix · ${ttsPrefix(result).length} characters</summary><pre>${ttsPrefix(result)}</pre></details>` : html`<p>Exact playback prefix: the ${ttsPrefix(result).length}-character text shown above.</p>`}<p>${result.length > 1000 ? "Playback is truncated: reads up to the first 1000 characters. Full text is shown above." : "Playback reads this result/question, at most 1000 characters."}</p><div class="toolbar"><button ?disabled=${!this.cancellationSafe || this.stopping || this.busy || this.cacheAction || !this.speech?.ready || !this.speech.enabled || !result} @click=${() => this.speak("detail")}>Speak result / question prefix</button><button @click=${() => this.closeDetail()}>Close detail</button></div></article>` : ""}
-      </section>`;
+        </section>
+        <section aria-label="Playback pack"><h3>Playback · Kokoro af_heart</h3>
+          <p>Approximately 116 MB (${this.packBytes("tts").toLocaleString()} bytes), including its own runtime copy; not a RAM estimate. Explicit downloads contact the same pinned distribution hosts. Import is local. English Heart at normal speed only.</p>
+          <div class="toolbar"><button ?disabled=${this.preparationBlocked || this.speechBusy || this.speech?.ready} @click=${() => this.run(() => this.prepareTts({ source: "download" }))}>Download pinned TTS pack</button><button aria-label="Import TTS pack (.pivoice)" ?disabled=${this.preparationBlocked || this.speechBusy || this.speech?.ready} @click=${() => this.choosePack("tts")}>Choose TTS pack (.pivoice)</button></div>
+          ${this.selectedTtsPack ? html`<p>Selected TTS file ${this.selectedTtsPack.name} (${this.selectedTtsPack.size.toLocaleString()} bytes). Selecting a file performs no import.</p><button ?disabled=${this.preparationBlocked || this.speechBusy || this.speech?.ready} @click=${() => {
+            const file = this.selectedTtsPack; this.selectedTtsPack = undefined;
+            if (file) this.run(() => this.prepareTts({ source: "import", file }));
+          }}>Import selected TTS pack</button>` : ""}
+          <p>Unsupported scripts/symbols, signed numbers/ranges, numeric spans over 15 digits and words/identifiers over 32 characters reject before audio. Other code, names and numbers may still be mispronounced. Text is data, never commands.</p>
+          <p>${this.cacheDescription("tts")}</p><button @click=${() => this.run(() => this.inspectPack("tts"))}>Inspect TTS cache</button><button ?disabled=${!this.cancellationSafe || this.stopping || this.cacheAction || this.approving} @click=${() => this.run(() => this.clearPack("tts"))}>Clear TTS cache</button>
+          <details><summary>Local TTS diagnostics</summary><pre aria-label="Local TTS diagnostics output">${JSON.stringify({ pack: __VOICE_PACKS__.tts.cacheName, state: this.speech?.state ?? "unprepared", enabled: this.speech?.enabled ?? false, safe: this.cancellationSafe, stopping: this.stopping, checkedBytes: this.speech?.status.progress?.checkedBytes ?? 0 }, null, 2)}</pre><p>No task text, phonemes or audio is included or forwarded. Reload the full page when upgrading from OS-synthesis builds.</p></details>
+        </section>
+      </details>
+      <details class="setup"><summary>Text fallback and worker model catalog</summary><p>Typing needs no speech pack, microphone or playback voice. Model selection is independent of speech. The catalog requires a selected hosted conversation with the companion enabled; no hidden session is created.</p>
+        <button @click=${() => this.run(async () => { const id = c?.state?.selectedSession?.id; if (!id) throw new Error("Select a hosted conversation first, or enter exact provider/model ID manually."); this.models = await this.request("models", { sessionId: id }) as unknown as ModelOption[]; })}>Load available models</button>
+      </details>`;
   }
 }
 if (!customElements.get("compn3rd-voice-panel")) customElements.define("compn3rd-voice-panel", VoicePanel);

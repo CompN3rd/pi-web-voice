@@ -1,3 +1,4 @@
+import { PauseEndpoint } from "./recognition-endpoint.js";
 import { CaptureTeardownError, openPcmCapture, type OpenPcmCapture, type PcmCapture } from "./recognition-capture.js";
 import { hasSpeechEnergy, MAX_PCM_SAMPLES, MAX_TRANSCRIPT_CHARACTERS, MAX_UTTERANCE_SECONDS } from "./recognition-pcm.js";
 import { WorkerRecognitionRuntime, type RecognitionRuntime, type SpeechPreparation } from "./recognition-runtime.js";
@@ -112,10 +113,12 @@ export class LocalRecognizer {
       this.status(epoch, "Local speech ready · audio stays on this device");
     } catch (error) { if (epoch === this.epoch) this.cancel(); throw error; }
   }
-  async start(): Promise<void> {
+  async start(options: { finishOnPause?: boolean } = {}): Promise<void> {
     if (!this.ready) throw new Error("Prepare local speech before opening the microphone");
     const epoch = this.epoch;
     this.currentState = "starting";
+    const endpoint = options.finishOnPause ? new PauseEndpoint() : undefined;
+    let pauseReached = false;
     this.pcm = new Float32Array(MAX_PCM_SAMPLES);
     this.length = 0;
     try {
@@ -143,7 +146,8 @@ export class LocalRecognizer {
         const count = Math.min(chunk.length, MAX_PCM_SAMPLES - this.length);
         this.pcm.set(chunk.subarray(0, count), this.length);
         this.length += count;
-        if (this.length === MAX_PCM_SAMPLES && this.currentState === "recording") this.finishAtLimit(epoch);
+        pauseReached = pauseReached || (endpoint?.push(chunk.subarray(0, count)) ?? false);
+        if ((this.length === MAX_PCM_SAMPLES || pauseReached) && this.currentState === "recording") this.finishAtLimit(epoch);
       }, error => {
         if (epoch !== this.epoch) return;
         this.cancel();
@@ -156,7 +160,7 @@ export class LocalRecognizer {
       clearTimeout(this.timer);
       this.timer = setTimeout(() => this.finishAtLimit(epoch), MAX_UTTERANCE_SECONDS * 1000);
       this.status(epoch, "Listening locally · finish within 20 seconds");
-      if (this.length === MAX_PCM_SAMPLES) this.finishAtLimit(epoch);
+      if (this.length === MAX_PCM_SAMPLES || pauseReached) this.finishAtLimit(epoch);
     } catch (error) { if (epoch === this.epoch) this.cancel(); throw error; }
   }
   private finishAtLimit(epoch: number): void {

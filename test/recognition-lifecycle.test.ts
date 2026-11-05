@@ -32,7 +32,7 @@ function fixture() {
     samples: (pcm = new Float32Array(8000).fill(0.1)) => samples(pcm), report: (message: string) => report(message),
     counts: () => ({ stopped, terminated, captures, inferences, inferredSamples }),
     async ready() { const promise = recognizer.prepare(); loading.resolve(); await promise; },
-    async start() { const promise = recognizer.start(); opening.resolve({ stop: () => { stopped++; } }); await promise; },
+    async start(options: { finishOnPause?: boolean } = {}) { const promise = recognizer.start(options); opening.resolve({ stop: () => { stopped++; } }); await promise; },
   };
 }
 
@@ -292,4 +292,21 @@ test("LocalRecognizer pending capture close has a main-thread 5s deadline; late 
   closing.resolve(); await new Promise(resolve => setImmediate(resolve));
   assert.equal(coordinator.safe, false); assert.equal(timers.size, 0);
   await assert.rejects(recognizer.prepare(), /unsafe/);
+});
+
+test("LocalRecognizer optional pause ending releases capture before inference and never reopens", async () => {
+  for (const enabled of [false, true]) {
+    const f = fixture(); await f.ready();
+    await f.start({ finishOnPause: enabled });
+    f.samples(new Float32Array(4800).fill(0.1));
+    f.samples(new Float32Array(19200));
+    assert.equal(f.counts().stopped, enabled ? 1 : 0);
+    assert.equal(f.counts().inferences, enabled ? 1 : 0);
+    if (!enabled) f.recognizer.cancel();
+    f.decoding.resolve("draft only");
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(f.transcripts, enabled ? ["draft only"] : []);
+    assert.equal(f.counts().captures, 1);
+    f.recognizer.dispose();
+  }
 });

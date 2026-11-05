@@ -11,7 +11,7 @@ const stats = {
   stops: 0, captures: 0, preparations: 0, terminations: 0, transcriptions: 0, instructions: 0,
   acquisitions: [] as { source: string; bytes?: number }[],
   disarms: [] as string[], requests: [] as { workspaceId: string; operation: string; input: any }[],
-  pendingPermission: false, pendingArm: false, pendingPrepare: false, pendingTranscript: false, pendingRead: false,
+  pendingPermission: false, pendingArm: false, pendingPrepare: false, pendingTranscript: false, pendingRead: false, pendingList: false, failList: false,
   failSpeechCancel: false, failExecute: false, spoken: [] as { text: string; voiceURI?: string }[], speechCancels: 0, navigations: [] as unknown[],
   ttsPreparations: 0, ttsRuntimes: 0, ttsTerminations: 0, ttsPlans: [] as string[], ttsChunks: 0,
   ttsAcquisitions: [] as { source: string; bytes?: number }[],
@@ -24,6 +24,7 @@ let armResolve: (() => void) | undefined;
 let prepareResolve: (() => void) | undefined;
 let transcriptResolve: ((value: string) => void) | undefined;
 const readResolvers: Array<() => void> = [];
+const listResolvers: Array<() => void> = [];
 let progress: ((message: string) => void) | undefined;
 let samples: ((pcm: Float32Array) => void) | undefined;
 let resultText = "<img src=x onerror=alert('bad')> Escaped result";
@@ -140,7 +141,12 @@ function makeContext(workspaceId: string, sessionId = "catalog-session") {
     peer: { async request(operation: string, input: any) {
       stats.requests.push({ workspaceId, operation, input });
       switch (operation) {
-        case "list": return structuredClone(workers);
+        case "list": {
+          if (stats.failList) throw new Error("Fixture status unavailable");
+          const snapshot = structuredClone(workers.map(w => ({ ...w, text: "", ...(w.question ? { question: "Input requested; read worker for details." } : {}) })));
+          if (stats.pendingList) await new Promise<void>(resolve => { listResolvers.push(resolve); });
+          return snapshot;
+        }
         case "arm": {
           const token = `fixture-token-${stats.requests.filter(r => r.operation === "arm").length}`;
           if (stats.pendingArm) await new Promise<void>(resolve => { armResolve = resolve; });
@@ -189,7 +195,17 @@ mount();
   resolvePrepare() { stats.pendingPrepare = false; progress?.("Late pack progress"); prepareResolve?.(); },
   resolveTranscript(value = "Late canceled transcript") { stats.pendingTranscript = false; transcriptResolve?.(value); },
   resolveRead(index = 0) { stats.pendingRead = false; readResolvers.splice(index, 1)[0]?.(); },
+  resolveList() { stats.pendingList = false; listResolvers.shift()?.(); },
   reachLimit() { samples?.(pcm(320000)); },
+  pause() { samples?.(new Float32Array(19200)); },
+  seedWorkers(values: Partial<Worker>[]) {
+    const workers = workspaceWorkers.get(context.workspace.id)!;
+    workers.splice(0, workers.length, ...values.map((value, index) => ({
+      id: `11111111-1111-4111-8111-${String(index + 1).padStart(12, "0")}`, projectId: "project", workspaceId: context.workspace.id,
+      sessionId: `session-${index + 1}`, title: "Same title", model: "test/model", status: "needs-input" as const,
+      text: "", revision: 1, createdAt: "", updatedAt: "", ...value,
+    })));
+  },
   setResult(value: string) { resultText = value; },
   bumpRevision() { workspaceWorkers.get(context.workspace.id)![0].revision++; },
   endSpeech() { endSpeech?.(); },

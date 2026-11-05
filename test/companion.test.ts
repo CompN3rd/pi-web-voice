@@ -255,9 +255,9 @@ test("companion send failure retains receipt; model/auth/persistence failures ne
   assert.equal((await h.start()).ok, false); assert.equal(h.sent.length, 0);
   h.controls.append = () => {};
   h.controls.send = () => { throw new Error("SECRET"); };
-  const requestId = randomUUID(); assert.equal((await h.start({ requestId })).snapshot.status, "failed");
+  const requestId = randomUUID(); assert.equal((await h.start({ requestId })).snapshot.status, "unknown");
   h.controls.send = () => {};
-  assert.equal((await h.start({ requestId })).snapshot.status, "failed"); assert.equal(h.sent.length, 0);
+  assert.equal((await h.start({ requestId })).snapshot.status, "unknown"); assert.equal(h.sent.length, 0);
   assert.ok(!JSON.stringify(h.replies).includes("SECRET"));
 });
 
@@ -299,5 +299,38 @@ test("companion rejects session/interference races while model selection is pend
     if (change === "shutdown") { await h.event("session_shutdown"); await h.event("session_start"); }
     else await h.event("before_agent_start", { messageType: "user", prompt: "Unrelated" });
     finish(true); assert.equal((await result).ok, false); assert.equal(h.sent.length, 0);
+  }
+});
+
+test("companion post-admission throws before or after acceptance stay unknown and never resend", async () => {
+  for (const accepted of [false, true]) {
+    const h = harness(); await h.event("session_start");
+    let attempts = 0;
+    let delivered = "";
+    h.controls.send = prompt => {
+      attempts++;
+      if (accepted) {
+        delivered = prompt;
+        // Delivery can start lifecycle work synchronously before the host throws.
+        void h.event("before_agent_start", { messageType: "user", prompt });
+        void h.event("message_start", { message: { role: "user", content: prompt } });
+      }
+      throw new Error("SECRET transport failure");
+    };
+    const requestId = randomUUID();
+    const response = await h.start({ requestId });
+    assert.equal(response.ok, false);
+    assert.equal(response.snapshot.status, "unknown");
+    assert.equal(h.entries.at(-1).data.receipts.length, 1);
+    assert.equal((await h.start({ requestId })).snapshot.status, "unknown");
+    assert.equal((await h.request({ operation: "reply", workerId, prompt: "Do not retry" })).ok, false);
+    await h.event("before_agent_start", { messageType: "user", prompt: delivered || "late delivery" });
+    await h.event("message_start", { message: { role: "user", content: delivered || "late delivery" } });
+    await h.assistant("Late success must not settle discarded turn"); await h.event("agent_settled");
+    assert.equal((await h.status()).snapshot.status, "unknown");
+    assert.equal((await h.start({ requestId })).snapshot.status, "unknown");
+    assert.equal(attempts, 1);
+    assert.ok(!JSON.stringify(h.replies).includes("SECRET"));
+    assert.ok(!(await h.status()).snapshot.text.includes("Late success"));
   }
 });
