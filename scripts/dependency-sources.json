@@ -1,0 +1,688 @@
+{
+  "schema": 1,
+  "archives": [
+    {
+      "id": "lit-current",
+      "repository": "https://github.com/lit/lit",
+      "revision": "20afabd3c5bfd49fdcdf1b8518e05c7f99a46db6",
+      "url": "https://codeload.github.com/lit/lit/tar.gz/20afabd3c5bfd49fdcdf1b8518e05c7f99a46db6",
+      "archive": "lit-20afabd3c5bfd49fdcdf1b8518e05c7f99a46db6.tar.gz",
+      "bytes": 5247005,
+      "sha256": "66524f90249160bdb013ea3040e5a70f96bc72212c51812faea369b8165b08f9",
+      "root": "lit-20afabd3c5bfd49fdcdf1b8518e05c7f99a46db6",
+      "evidenceFiles": {
+        "LICENSE": {
+          "bytes": 1517,
+          "sha256": "45d31799d0db956cc3eb5469346abbd9b7025babc5ff29fab10d7095da992ef1"
+        },
+        "package.json": {
+          "bytes": 11376,
+          "sha256": "83b9c85e55efd6762aa05755c17d8c5bd314d3c5a3045fcd97da46571d645a29"
+        },
+        "package-lock.json": {
+          "bytes": 756711,
+          "sha256": "b8d38cc98a29c9e37c8a9fd156981ee49d39df2b33d1514820a7d9c3c86d6cab"
+        },
+        "packages/lit/package.json": {
+          "bytes": 10758,
+          "sha256": "b96d657d4a2e94394569b6a0f25881a4e4908a2682094d20d3b251ef7e1198a6"
+        },
+        "packages/lit/src/index.ts": {
+          "bytes": 403,
+          "sha256": "9efcad0b2fd0f0f72ddc1915f8d67d1b9fe88cdcb661ee52fa26cd9fd0f3da45"
+        },
+        "packages/lit-html/src/lit-html.ts": {
+          "bytes": 79937,
+          "sha256": "ec498c043cf596ba4b4c8e5bc11b8b5755c302d6f908bc167dd794ed1908153e"
+        },
+        "packages/lit-html/rollup.config.js": {
+          "bytes": 1281,
+          "sha256": "5e88cfab0f090ad1ecd06082d6d789b2dfdb5fb4a374eb5638ff054d7f256748"
+        },
+        "packages/lit/rollup.config.js": {
+          "bytes": 3374,
+          "sha256": "f3c0e636acb5bbf3caf1999fb81425204ecbe2633d2980f88984679f59950548"
+        }
+      }
+    },
+    {
+      "id": "lit-elements",
+      "repository": "https://github.com/lit/lit",
+      "revision": "0fc671bc390cac3b9900fc3616347eeeecd91d5a",
+      "url": "https://codeload.github.com/lit/lit/tar.gz/0fc671bc390cac3b9900fc3616347eeeecd91d5a",
+      "archive": "lit-0fc671bc390cac3b9900fc3616347eeeecd91d5a.tar.gz",
+      "bytes": 5233056,
+      "sha256": "142ad889236246e6f1420228bcd15fd14f89f78d6d750df9f1abcfd5361c85a0",
+      "root": "lit-0fc671bc390cac3b9900fc3616347eeeecd91d5a",
+      "evidenceFiles": {
+        "LICENSE": {
+          "bytes": 1517,
+          "sha256": "45d31799d0db956cc3eb5469346abbd9b7025babc5ff29fab10d7095da992ef1"
+        },
+        "package.json": {
+          "bytes": 11376,
+          "sha256": "83b9c85e55efd6762aa05755c17d8c5bd314d3c5a3045fcd97da46571d645a29"
+        },
+        "package-lock.json": {
+          "bytes": 739846,
+          "sha256": "6b1bb3ccd564d3bb9f99492415d6b471a07ee6b6e3d76cbd7285dcb7dacea759"
+        },
+        "packages/lit-element/src/lit-element.ts": {
+          "bytes": 9772,
+          "sha256": "da78ead1212562e3bec7c2fbfeee92224b9aaea9f7698902e4425aa3edf412b3"
+        },
+        "packages/reactive-element/src/reactive-element.ts": {
+          "bytes": 61700,
+          "sha256": "964bd07ba3c6a0064e62eea66a953ade619abcf42cd20e27699f8a3d18612fdf"
+        },
+        "packages/lit-element/rollup.config.js": {
+          "bytes": 781,
+          "sha256": "73f910cf03a37a4c8ebdc4de367393b767774e3d73e8710d642a5164a2e2e72d"
+        },
+        "packages/reactive-element/rollup.config.js": {
+          "bytes": 779,
+          "sha256": "db23ab856d617245b56a7b8b941bf4d8154c7cf6c1e0e0c96d2886b5ad4ced5c"
+        }
+      }
+    },
+    {
+      "id": "transformers",
+      "repository": "https://github.com/huggingface/transformers.js",
+      "revision": "2ec882e739e4cb461f8d440d4d7394cbf5372429",
+      "url": "https://codeload.github.com/huggingface/transformers.js/tar.gz/2ec882e739e4cb461f8d440d4d7394cbf5372429",
+      "archive": "transformers-2ec882e739e4cb461f8d440d4d7394cbf5372429.tar.gz",
+      "bytes": 20731121,
+      "sha256": "8ce5ae4b5327892b72ac91c733583765ee12f70e596a30da6ea31cb51eeab55e",
+      "root": "transformers.js-2ec882e739e4cb461f8d440d4d7394cbf5372429",
+      "evidenceFiles": {
+        "LICENSE": {
+          "bytes": 11358,
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        },
+        "package.json": {
+          "bytes": 2694,
+          "sha256": "00c02ca357bf03c801f33c9a431c0169b99c1de1e14f2134cabc902cce53d4f3"
+        },
+        "package-lock.json": {
+          "bytes": 427732,
+          "sha256": "cbde5a16ae83e6ed34289efa01289a2b8680250b6cf5d5e2168933cce3a7e325"
+        },
+        "webpack.config.js": {
+          "bytes": 6144,
+          "sha256": "bfbab2f1632456b6c9caeb2336f2bb706dec8151b53e64318aaa4498e3f16704"
+        },
+        "src/transformers.js": {
+          "bytes": 1712,
+          "sha256": "f05b60d0a972579ce3d88d38fb6f615de5963083ba9ae4e2b521ef287f660eb3"
+        },
+        "src/models.js": {
+          "bytes": 352111,
+          "sha256": "6ba3e066c05b5a4ae35281b0cafff0504e13a6b18d7e2e3799eb9f243a610108"
+        }
+      }
+    },
+    {
+      "id": "ort-web",
+      "repository": "https://github.com/microsoft/onnxruntime",
+      "revision": "89f8206ba4f1c22c39e0297fb55272e8ce8cd7d0",
+      "url": "https://codeload.github.com/microsoft/onnxruntime/tar.gz/89f8206ba4f1c22c39e0297fb55272e8ce8cd7d0",
+      "archive": "onnxruntime-89f8206ba4f1c22c39e0297fb55272e8ce8cd7d0.tar.gz",
+      "bytes": 241137309,
+      "sha256": "12d10c25fccca4fe79be554acd6bd9b73c90d2b3fda9d2677960db0302cd79f7",
+      "root": "onnxruntime-89f8206ba4f1c22c39e0297fb55272e8ce8cd7d0",
+      "evidenceFiles": {
+        "LICENSE": {
+          "bytes": 1073,
+          "sha256": "2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c"
+        },
+        "ThirdPartyNotices.txt": {
+          "bytes": 326866,
+          "sha256": "e9e90971a8e75a9a8ac0c6412e29c1202d079998389915aa485f46c816c3b4cc"
+        },
+        "cmake/CMakeLists.txt": {
+          "bytes": 89837,
+          "sha256": "bcc5f63b16835a8556c265aab9745a1909f1e2c3488048e2bf409a891b7a5105"
+        },
+        "cmake/deps.txt": {
+          "bytes": 6961,
+          "sha256": "468529b3ae2d75569da5002aa21d79f3e0a673ba12e5742ec77cd12fb7309510"
+        },
+        ".gitmodules": {
+          "bytes": 383,
+          "sha256": "d9faa908acb8c577e2c8ba07f89166fe15b229fb7a1695259dc8bd2690a5b684"
+        },
+        "js/web/package.json": {
+          "bytes": 3491,
+          "sha256": "8bfe025250533b9410377dca00b2cb7427e96cb9fa17dd44b5b0fb3a0f526fc6"
+        },
+        "js/web/script/build.ts": {
+          "bytes": 23512,
+          "sha256": "e8794db2a6db75c503d09463fdc7af704fd73e7a59006637d84af451ab0390f1"
+        },
+        "tools/ci_build/build.py": {
+          "bytes": 114077,
+          "sha256": "361dded09f98103d187f956ec85e9679942e9db16bda1a8014bd5f7ff89d6477"
+        },
+        "tools/ci_build/github/azure-pipelines/web-ci-pipeline.yml": {
+          "bytes": 1667,
+          "sha256": "6d5dd69b4b54a877815a76820309984691fe327ea7c50066fd65829f11ead424"
+        },
+        "onnxruntime/core/session/inference_session.cc": {
+          "bytes": 160838,
+          "sha256": "50641dbf4a7a1e8700115b35f7ea1668102679d8e88ec5cf66fbb5e635086e2a"
+        }
+      }
+    },
+    {
+      "id": "ort-common",
+      "repository": "https://github.com/microsoft/onnxruntime",
+      "revision": "e0b66cad282043d4377cea5269083f17771b6dfc",
+      "url": "https://codeload.github.com/microsoft/onnxruntime/tar.gz/e0b66cad282043d4377cea5269083f17771b6dfc",
+      "archive": "onnxruntime-e0b66cad282043d4377cea5269083f17771b6dfc.tar.gz",
+      "bytes": 240798986,
+      "sha256": "79a03834d974369bae29bcb60d6b4b44d4c9149c43e716bdaaee1d593c520e14",
+      "root": "onnxruntime-e0b66cad282043d4377cea5269083f17771b6dfc",
+      "evidenceFiles": {
+        "LICENSE": {
+          "bytes": 1073,
+          "sha256": "2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c"
+        },
+        "js/common/package.json": {
+          "bytes": 924,
+          "sha256": "5b762baf33234e76ea922ee7a13e80780035f2799b7608c4f3a58b41dbd69d48"
+        },
+        "js/common/lib/tensor.ts": {
+          "bytes": 12665,
+          "sha256": "0d6df6db3264622732592cf580f8b4f5284573b4bb6b511fdd5f0ddd93186a67"
+        },
+        "js/common/tsconfig.json": {
+          "bytes": 196,
+          "sha256": "9bb41e70af6a97ccdd52e2420ef2f39a591498aca3862732d1960fd9d5cc4d4c"
+        },
+        "js/scripts/update-version.ts": {
+          "bytes": 1166,
+          "sha256": "7a2bc21c248b38219bc7fb3dd5ef6d7e71a5f2cb310c294b42493273f8dd267a"
+        }
+      }
+    },
+    {
+      "id": "pi-web",
+      "repository": "https://github.com/jmfederico/pi-web",
+      "revision": "29f0ace6d955a458a947bb0f03673fa069afb8da",
+      "url": "https://codeload.github.com/jmfederico/pi-web/tar.gz/29f0ace6d955a458a947bb0f03673fa069afb8da",
+      "archive": "pi-web-29f0ace6d955a458a947bb0f03673fa069afb8da.tar.gz",
+      "bytes": 3295233,
+      "sha256": "93df459b89b761df65cf2757ba16327b4d5b15413855caac25b10aa596ea7137",
+      "root": "pi-web-29f0ace6d955a458a947bb0f03673fa069afb8da",
+      "evidenceFiles": {
+        "LICENSE": {
+          "bytes": 1084,
+          "sha256": "33224f23ad1e3dc3e6c3870c3b136013519e1d327aa795b090f47e02b0f38632"
+        },
+        "package.json": {
+          "bytes": 5567,
+          "sha256": "002397501c8dad904278a4a1145ca6ca54c6501b650744d2a912d43566f6b85e"
+        },
+        "package-lock.json": {
+          "bytes": 302904,
+          "sha256": "79f4ff16acad552b6cc9c1a7a8a189faf8f2f84fd547dc990a038b20d0011a47"
+        },
+        "tsconfig.build.json": {
+          "bytes": 289,
+          "sha256": "dc26fdcebd5cc4f03661137aa6ce3a4525db4b8f2810752f2a5184fc4510f3df"
+        },
+        "tsconfig.plugin-api.json": {
+          "bytes": 291,
+          "sha256": "00ae5bb551364633ae462025e6cabb80c7fe6df73721afd0432b0cec79373353"
+        },
+        "src/server-plugin-api.ts": {
+          "bytes": 32858,
+          "sha256": "013e1c0a7d0ceb6f3e06ee025b13caff767443825d158c46a10917dd9999f25c"
+        },
+        "src/shared/pluginApiTypes.ts": {
+          "bytes": 5863,
+          "sha256": "85f018e4d21798d1a0eecf548023b4993a7974bfd09555181c6254fa76386396"
+        }
+      }
+    },
+    {
+      "id": "jinja",
+      "repository": "https://github.com/huggingface/huggingface.js",
+      "revision": "f5d9f06cc86cf89deeee8bfa371eee3620a2e8b1",
+      "url": "https://codeload.github.com/huggingface/huggingface.js/tar.gz/f5d9f06cc86cf89deeee8bfa371eee3620a2e8b1",
+      "archive": "jinja-f5d9f06cc86cf89deeee8bfa371eee3620a2e8b1.tar.gz",
+      "bytes": 5065958,
+      "sha256": "c5e35a1ae685301a11fbfd83f3680b97579a9db5a9138e854ea9110eaf743e26",
+      "root": "huggingface.js-f5d9f06cc86cf89deeee8bfa371eee3620a2e8b1",
+      "evidenceFiles": {
+        "LICENSE": {
+          "bytes": 1069,
+          "sha256": "d6e7b19451c1b3d1d66353bb4b1274138953b3bfd9ae60c56e77b1f548796982"
+        },
+        "package.json": {
+          "bytes": 1056,
+          "sha256": "ce235e9e143b6aec264e9181c4f1558e3b2db95b500b86fda4a248603056dd74"
+        },
+        "pnpm-lock.yaml": {
+          "bytes": 181290,
+          "sha256": "0a304e91d3f7d5bf868f5bc087987267e3447ff48d2633251e48eb0e468a2892"
+        },
+        "packages/jinja/package.json": {
+          "bytes": 1458,
+          "sha256": "25f73d54fc3bec5a1b6038cae92d714aace685f66961159bcd29b731b8ff2fc2"
+        },
+        "packages/jinja/tsconfig.json": {
+          "bytes": 465,
+          "sha256": "5c5e86ab5516c11e654cb885807f1d5690f6b5f51272f4ba16f4e3d3b5f7dc17"
+        },
+        "packages/jinja/src/index.ts": {
+          "bytes": 1691,
+          "sha256": "e05449bc732104e1956f4d5ba28a9c81de93fd0716e46f67d0e30c247bc924a0"
+        },
+        "packages/jinja/src/runtime.ts": {
+          "bytes": 61173,
+          "sha256": "a7db96e97b887049487d977fda7435a8827aee61feee8a1c00305aa072b3e35e"
+        }
+      }
+    }
+  ],
+  "packages": [
+    {
+      "name": "lit",
+      "version": "3.3.3",
+      "sourceArchive": "lit-current",
+      "sourceDirectory": "packages/lit",
+      "revisionEvidence": "npm release metadata gitHead; archive includes original source, build configuration and in-tree notices.",
+      "sourceComparison": {
+        "sourceMaps": [
+          "directives/repeat.js.map",
+          "index.js.map"
+        ]
+      }
+    },
+    {
+      "name": "lit-html",
+      "version": "3.3.3",
+      "sourceArchive": "lit-current",
+      "sourceDirectory": "packages/lit-html",
+      "revisionEvidence": "npm release metadata gitHead; archive includes original source, build configuration and in-tree notices.",
+      "sourceComparison": {
+        "sourceMaps": [
+          "directive-helpers.js.map",
+          "directive.js.map",
+          "directives/repeat.js.map",
+          "is-server.js.map",
+          "lit-html.js.map"
+        ]
+      }
+    },
+    {
+      "name": "lit-element",
+      "version": "4.2.2",
+      "sourceArchive": "lit-elements",
+      "sourceDirectory": "packages/lit-element",
+      "revisionEvidence": "npm release metadata gitHead; archive includes original source, build configuration and in-tree notices.",
+      "sourceComparison": {
+        "sourceMaps": [
+          "lit-element.js.map"
+        ]
+      }
+    },
+    {
+      "name": "@lit/reactive-element",
+      "version": "2.1.2",
+      "sourceArchive": "lit-elements",
+      "sourceDirectory": "packages/reactive-element",
+      "revisionEvidence": "npm release metadata gitHead; archive includes original source, build configuration and in-tree notices.",
+      "sourceComparison": {
+        "sourceMaps": [
+          "css-tag.js.map",
+          "reactive-element.js.map"
+        ]
+      }
+    },
+    {
+      "name": "@huggingface/transformers",
+      "version": "3.8.1",
+      "sourceArchive": "transformers",
+      "sourceDirectory": ".",
+      "revisionEvidence": "npm release metadata gitHead; archive includes original source, build configuration and in-tree notices.",
+      "sourceComparison": {
+        "directory": "src",
+        "suffix": ".js",
+        "matches": 119
+      }
+    },
+    {
+      "name": "onnxruntime-common",
+      "version": "1.21.0",
+      "sourceArchive": "ort-common",
+      "sourceDirectory": "js/common",
+      "revisionEvidence": "Upstream v1.21.0 annotated tag peeled to this commit; all 21 npm lib TypeScript files are byte-identical to js/common/lib.",
+      "sourceComparison": {
+        "directory": "lib",
+        "suffix": ".ts",
+        "matches": 21
+      }
+    },
+    {
+      "name": "onnxruntime-web",
+      "version": "1.22.0-dev.20250409-89f8206ba4",
+      "sourceArchive": "ort-web",
+      "sourceDirectory": "js/web",
+      "revisionEvidence": "npm __commit.txt equals full revision; 205 lib TypeScript files match js/web/lib. Generated lib/version.ts differs only by the dev version string. Archive also supplies prebundled common sources at this native revision (not common 1.21.0).",
+      "sourceComparison": {
+        "directory": "lib",
+        "suffix": ".ts",
+        "matches": 205,
+        "generatedVersion": "lib/version.ts"
+      }
+    },
+    {
+      "name": "@jmfederico/pi-web",
+      "version": "1.202610.3",
+      "sourceArchive": "pi-web",
+      "sourceDirectory": ".",
+      "revisionEvidence": "npm release metadata gitHead; archive includes original source, build configuration and in-tree notices. Independently transpiling src/server-plugin-api.ts with installed TypeScript 5.9.3 (ES2022/ESNext) produced byte-identical public server-plugin-api.js; no host implementation was imported/executed.",
+      "sourceComparison": {},
+      "publicApiArtifact": {
+        "path": "dist/server-plugin-api.js",
+        "bytes": 16092,
+        "sha256": "dac8ed7850a7b892f017df024a46e307ec4b156498a19d48aefbc4b6619dba24"
+      }
+    }
+  ],
+  "embeddedPackages": [
+    {
+      "name": "@huggingface/jinja",
+      "version": "0.5.3",
+      "sourceArchive": "jinja",
+      "sourceDirectory": "packages/jinja",
+      "revisionEvidence": "Upstream release commit; all seven npm src TypeScript files match. Transformers upstream lock selects 0.5.3; its shipped webpack sourcesContent for jinja matches npm 0.5.3 dist/index.js byte-for-byte, NOT installed transitive 0.5.10.",
+      "embeddedSource": {
+        "bytes": 96440,
+        "sha256": "77e3506437517fe3b6bf4fc71882af1dfa9e809690714dfe0105ea17b6865b25"
+      },
+      "packageArchive": {
+        "archive": "jinja-0.5.3.tgz",
+        "url": "https://registry.npmjs.org/@huggingface/jinja/-/jinja-0.5.3.tgz",
+        "integrity": "sha512-asqfZ4GQS0hD876Uw4qiUb7Tr/V5Q+JZuo2L+BtdrD4U40QU58nIRq3ZSgAzJgT874VLjhGVacaYfrdpXtEvtA==",
+        "bytes": 69309,
+        "sha256": "faf5561325c1d7662ec482d07692ad072eda3d19f8e4290a71bff684ebf5e1a8"
+      },
+      "sourceComparison": {
+        "directory": "src",
+        "suffix": ".ts",
+        "matches": 7
+      }
+    }
+  ],
+  "onnxNative": {
+    "sourceArchive": "ort-web",
+    "manifest": "cmake/deps.txt",
+    "manifestArtifact": {
+      "bytes": 6961,
+      "sha256": "468529b3ae2d75569da5002aa21d79f3e0a673ba12e5742ec77cd12fb7309510"
+    },
+    "declaredDependencies": [
+      {
+        "name": "abseil_cpp",
+        "url": "https://github.com/abseil/abseil-cpp/archive/refs/tags/20240722.0.zip",
+        "sha1": "36ee53eb1466fb6e593fc5c286680de31f8a494a"
+      },
+      {
+        "name": "coremltools",
+        "url": "https://github.com/apple/coremltools/archive/refs/tags/7.1.zip",
+        "sha1": "f1bab0f30966f2e217d8e01207d518f230a1641a"
+      },
+      {
+        "name": "cxxopts",
+        "url": "https://github.com/jarro2783/cxxopts/archive/3c73d91c0b04e2b59462f0a741be8c07024c1bc0.zip",
+        "sha1": "6c6ca7f8480b26c8d00476e0e24b7184717fe4f0"
+      },
+      {
+        "name": "date",
+        "url": "https://github.com/HowardHinnant/date/archive/refs/tags/v3.0.1.zip",
+        "sha1": "2dac0c81dc54ebdd8f8d073a75c053b04b56e159"
+      },
+      {
+        "name": "dlpack",
+        "url": "https://github.com/dmlc/dlpack/archive/refs/tags/v0.6.zip",
+        "sha1": "4d565dd2e5b31321e5549591d78aa7f377173445"
+      },
+      {
+        "name": "eigen",
+        "url": "https://gitlab.com/libeigen/eigen/-/archive/1d8b82b0740839c0de7f1242a3585e3390ff5f33/eigen-1d8b82b0740839c0de7f1242a3585e3390ff5f33.zip",
+        "sha1": "5ea4d05e62d7f954a46b3213f9b2535bdd866803"
+      },
+      {
+        "name": "flatbuffers",
+        "url": "https://github.com/google/flatbuffers/archive/refs/tags/v23.5.26.zip",
+        "sha1": "59422c3b5e573dd192fead2834d25951f1c1670c"
+      },
+      {
+        "name": "fp16",
+        "url": "https://github.com/Maratyszcza/FP16/archive/0a92994d729ff76a58f692d3028ca1b64b145d91.zip",
+        "sha1": "b985f6985a05a1c03ff1bb71190f66d8f98a1494"
+      },
+      {
+        "name": "fxdiv",
+        "url": "https://github.com/Maratyszcza/FXdiv/archive/63058eff77e11aa15bf531df5dd34395ec3017c8.zip",
+        "sha1": "a5658f4036402dbca7cebee32be57fb8149811e1"
+      },
+      {
+        "name": "google_benchmark",
+        "url": "https://github.com/google/benchmark/archive/refs/tags/v1.8.5.zip",
+        "sha1": "cd47d3d272faf353600c8cc2fdec2b52d6f69177"
+      },
+      {
+        "name": "googletest",
+        "url": "https://github.com/google/googletest/archive/refs/tags/v1.15.0.zip",
+        "sha1": "9d2d0af8d77ac726ea55d44a8fa727ec98311349"
+      },
+      {
+        "name": "googlexnnpack",
+        "url": "https://github.com/google/XNNPACK/archive/fe98e0b93565382648129271381c14d6205255e3.zip",
+        "sha1": "14f61dcf17cec2cde34ba2dcf61d6f24bf6059f3"
+      },
+      {
+        "name": "json",
+        "url": "https://github.com/nlohmann/json/archive/refs/tags/v3.11.3.zip",
+        "sha1": "5e88795165cc8590138d1f47ce94ee567b85b4d6"
+      },
+      {
+        "name": "microsoft_gsl",
+        "url": "https://github.com/microsoft/GSL/archive/refs/tags/v4.0.0.zip",
+        "sha1": "cf368104cd22a87b4dd0c80228919bb2df3e2a14"
+      },
+      {
+        "name": "microsoft_wil",
+        "url": "https://github.com/microsoft/wil/archive/refs/tags/v1.0.230629.1.zip",
+        "sha1": "e4a542a323c070376f7c2d1973d0f7ddbc1d2fa5"
+      },
+      {
+        "name": "mimalloc",
+        "url": "https://github.com/microsoft/mimalloc/archive/refs/tags/v2.1.1.zip",
+        "sha1": "d5ee7d34223d0567892db5179849939c8769dc41"
+      },
+      {
+        "name": "mp11",
+        "url": "https://github.com/boostorg/mp11/archive/refs/tags/boost-1.82.0.zip",
+        "sha1": "9bc9e01dffb64d9e0773b2e44d2f22c51aace063"
+      },
+      {
+        "name": "onnx",
+        "url": "https://github.com/onnx/onnx/archive/refs/tags/v1.17.0.zip",
+        "sha1": "13a60ac5217c104139ce0fd024f48628e7bcf5bc"
+      },
+      {
+        "name": "onnx_tensorrt",
+        "url": "https://github.com/onnx/onnx-tensorrt/archive/d5dce67db7c2e64b07e055571f5ec06f7f254de2.zip",
+        "sha1": "01114d3b67650857281fa50faa2e412130a63b69"
+      },
+      {
+        "name": "protobuf",
+        "url": "https://github.com/protocolbuffers/protobuf/archive/refs/tags/v21.12.zip",
+        "sha1": "7cf2733949036c7d52fda017badcab093fe73bfa"
+      },
+      {
+        "name": "protoc_win64",
+        "url": "https://github.com/protocolbuffers/protobuf/releases/download/v21.12/protoc-21.12-win64.zip",
+        "sha1": "b4521f7ada5b260380f94c4bd7f1b7684c76969a"
+      },
+      {
+        "name": "protoc_win32",
+        "url": "https://github.com/protocolbuffers/protobuf/releases/download/v21.12/protoc-21.12-win32.zip",
+        "sha1": "3688010318192c46ce73213cdfb6b3e5656da874"
+      },
+      {
+        "name": "protoc_linux_x64",
+        "url": "https://github.com/protocolbuffers/protobuf/releases/download/v21.12/protoc-21.12-linux-x86_64.zip",
+        "sha1": "338462004aa5be9fba45b35b5b4be43f69b47a90"
+      },
+      {
+        "name": "protoc_linux_x86",
+        "url": "https://github.com/protocolbuffers/protobuf/releases/download/v21.12/protoc-21.12-linux-x86_32.zip",
+        "sha1": "61fdbe7d6360e065ec6fea23bca2cca673115fb8"
+      },
+      {
+        "name": "protoc_linux_aarch64",
+        "url": "https://github.com/protocolbuffers/protobuf/releases/download/v21.12/protoc-21.12-linux-aarch_64.zip",
+        "sha1": "df9d45470b0b8cf939dd2f0ec6b88e9cafc4d617"
+      },
+      {
+        "name": "protoc_mac_universal",
+        "url": "https://github.com/protocolbuffers/protobuf/releases/download/v21.12/protoc-21.12-osx-universal_binary.zip",
+        "sha1": "23710c3d1c2036d8d65a6a22234372fa2d7af9ef"
+      },
+      {
+        "name": "psimd",
+        "url": "https://github.com/Maratyszcza/psimd/archive/072586a71b55b7f8c584153d223e95687148a900.zip",
+        "sha1": "1f5454b01f06f9656b77e4a5e2e31d7422487013"
+      },
+      {
+        "name": "pthreadpool",
+        "url": "https://github.com/google/pthreadpool/archive/4e80ca24521aa0fb3a746f9ea9c3eaa20e9afbb0.zip",
+        "sha1": "bd4ea65c8292801e9555b527a0ecbb2e0092c917"
+      },
+      {
+        "name": "pybind11",
+        "url": "https://github.com/pybind/pybind11/archive/refs/tags/v2.13.6.zip",
+        "sha1": "f780292da9db273c8ef06ccf5fd4b623624143e9"
+      },
+      {
+        "name": "pytorch_cpuinfo",
+        "url": "https://github.com/pytorch/cpuinfo/archive/8a1772a0c5c447df2d18edf33ec4603a8c9c04a6.zip",
+        "sha1": "85bf8a60dae026b99b6ccd78606c85ed83bfb2cd"
+      },
+      {
+        "name": "re2",
+        "url": "https://github.com/google/re2/archive/refs/tags/2024-07-02.zip",
+        "sha1": "646e1728269cde7fcef990bf4a8e87b047882e88"
+      },
+      {
+        "name": "safeint",
+        "url": "https://github.com/dcleblanc/SafeInt/archive/refs/tags/3.0.28.zip",
+        "sha1": "23f252040ff6cb9f1fd18575b32fa8fb5928daac"
+      },
+      {
+        "name": "tensorboard",
+        "url": "https://github.com/tensorflow/tensorboard/archive/373eb09e4c5d2b3cc2493f0949dc4be6b6a45e81.zip",
+        "sha1": "67b833913605a4f3f499894ab11528a702c2b381"
+      },
+      {
+        "name": "cutlass",
+        "url": "https://github.com/NVIDIA/cutlass/archive/refs/tags/v3.5.1.zip",
+        "sha1": "e49b2b964163d27765a5002d210a2f3c73771835"
+      },
+      {
+        "name": "extensions",
+        "url": "https://github.com/microsoft/onnxruntime-extensions/archive/c24b7bab0c12f53da76d0c31b03b9f0f8ec8f3b4.zip",
+        "sha1": "239063aee4946a9af147b473a4c3da78ba7413b4"
+      },
+      {
+        "name": "composable_kernel",
+        "url": "https://github.com/ROCmSoftwarePlatform/composable_kernel/archive/204da9c522cebec5220bba52cd3542ebcaf99e7a.zip",
+        "sha1": "1827348efd47831c13074245274d41b7cae8a557"
+      },
+      {
+        "name": "directx_headers",
+        "url": "https://github.com/microsoft/DirectX-Headers/archive/refs/tags/v1.613.1.zip",
+        "sha1": "47653509a3371eabb156360f42faf582f314bf2e"
+      },
+      {
+        "name": "cudnn_frontend",
+        "url": "https://github.com/NVIDIA/cudnn-frontend/archive/refs/tags/v1.7.0.zip",
+        "sha1": "d0753d8d5b39947ca0729d7773cb84653a129eb1"
+      },
+      {
+        "name": "dawn",
+        "url": "https://github.com/google/dawn/archive/4cb1f9be152a4fa6bb695c08cd707ab078a1e2fb.zip",
+        "sha1": "de39336b7715f53c14eec61072293b85cc73b691"
+      },
+      {
+        "name": "kleidiai",
+        "url": "https://github.com/ARM-software/kleidiai/archive/refs/tags/v1.4.0.tar.gz",
+        "sha1": "22d3b57b54a61c194ab256ff11b0353a3b220244"
+      }
+    ],
+    "gitSubmodules": [
+      {
+        "path": "cmake/external/emsdk",
+        "revision": "074211759c17c646164d3271ca1d155cc174f78e",
+        "repository": "https://github.com/emscripten-core/emsdk.git"
+      },
+      {
+        "path": "cmake/external/libprotobuf-mutator",
+        "revision": "7a2ed51a6b682a83e345ff49fc4cfd7ca47550db",
+        "repository": "https://github.com/google/libprotobuf-mutator.git"
+      },
+      {
+        "path": "cmake/external/onnx",
+        "revision": "b8baa8446686496da4cc8fda09f2b6fe65c2a02c",
+        "repository": "https://github.com/onnx/onnx.git"
+      }
+    ],
+    "status": "Declared upstream build inputs, not a WASM link inventory. deps.txt includes optional/platform/test inputs and binary protoc tools. SHA1 values are upstream declarations, not acquired/verified archives. GitHub source archives omit submodule contents. Exact release build flags, patches, toolchain/runtime support and recursive dependency closure still require verification. No native binary reproduction is claimed.",
+    "gitlinkEvidence": "https://api.github.com/repos/microsoft/onnxruntime/git/trees/89f8206ba4f1c22c39e0297fb55272e8ce8cd7d0?recursive=1"
+  },
+  "remainingGates": [
+    "Verify exact ONNX native binary/source/build correspondence, selected native dependencies, omitted git submodules and embedded Emscripten/runtime sources; declared pins are not acquired source closure.",
+    "Review combined-work scope, host/peer boundary, user-facing legal notices, source access and source-delivery terms before conveyance.",
+    "Verify model/voice provenance and required attribution, full-model/device/isolated-host acceptance and release-owner approval."
+  ],
+  "bundledInputs": [
+    "node_modules/@huggingface/transformers/dist/transformers.web.js",
+    "node_modules/@jmfederico/pi-web/dist/server-plugin-api.js",
+    "node_modules/@lit/reactive-element/css-tag.js",
+    "node_modules/@lit/reactive-element/reactive-element.js",
+    "node_modules/lit-element/lit-element.js",
+    "node_modules/lit-html/directive-helpers.js",
+    "node_modules/lit-html/directive.js",
+    "node_modules/lit-html/directives/repeat.js",
+    "node_modules/lit-html/is-server.js",
+    "node_modules/lit-html/lit-html.js",
+    "node_modules/lit/directives/repeat.js",
+    "node_modules/lit/index.js",
+    "node_modules/onnxruntime-common/dist/esm/backend-impl.js",
+    "node_modules/onnxruntime-common/dist/esm/backend.js",
+    "node_modules/onnxruntime-common/dist/esm/env-impl.js",
+    "node_modules/onnxruntime-common/dist/esm/env.js",
+    "node_modules/onnxruntime-common/dist/esm/index.js",
+    "node_modules/onnxruntime-common/dist/esm/inference-session-impl.js",
+    "node_modules/onnxruntime-common/dist/esm/inference-session.js",
+    "node_modules/onnxruntime-common/dist/esm/onnx-model.js",
+    "node_modules/onnxruntime-common/dist/esm/onnx-value.js",
+    "node_modules/onnxruntime-common/dist/esm/tensor-conversion-impl.js",
+    "node_modules/onnxruntime-common/dist/esm/tensor-conversion.js",
+    "node_modules/onnxruntime-common/dist/esm/tensor-factory-impl.js",
+    "node_modules/onnxruntime-common/dist/esm/tensor-factory.js",
+    "node_modules/onnxruntime-common/dist/esm/tensor-impl-type-mapping.js",
+    "node_modules/onnxruntime-common/dist/esm/tensor-impl.js",
+    "node_modules/onnxruntime-common/dist/esm/tensor-utils-impl.js",
+    "node_modules/onnxruntime-common/dist/esm/tensor.js",
+    "node_modules/onnxruntime-common/dist/esm/trace.js",
+    "node_modules/onnxruntime-common/dist/esm/version.js",
+    "node_modules/onnxruntime-web/dist/ort.bundle.min.mjs"
+  ]
+}

@@ -32,7 +32,7 @@ test("tts-source-distribution: allowlist preserves uncommitted bytes without rea
   assert.ok(![...files.keys()].some(path => /^(\.git\/|node_modules\/|dist\/)/.test(path)));
   const inventory = dependencyInventory(files);
   assert.equal(inventory.bundled.length, 8);
-  assert.ok(inventory.bundled.every(item => item.integrity.startsWith("sha512-") && item.sourceCompleteness.startsWith("Unverified")));
+  assert.ok(inventory.bundled.every(item => item.integrity.startsWith("sha512-") && item.sourceCompleteness.includes("UPSTREAM-SOURCES.json")));
   assert.ok(inventory.remainingGates.some(item => item.includes("ONNX native")));
 }));
 

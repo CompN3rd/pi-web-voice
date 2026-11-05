@@ -21,6 +21,13 @@ test("generated bundle notices retain complete license text for every reviewed p
     // A subsequent speech-only inventory must retain UI/server notices.
     await writeBundleNotices(root, ["node_modules/@huggingface/transformers/src/transformers.js"]);
     const result = await readFile(join(root, "dist/THIRD_PARTY_NOTICES.txt"), "utf8");
+    assert.ok(result.includes("@huggingface/jinja@0.5.3 — MIT (embedded in Transformers.js)"));
+    const jinjaLicense = await readFile("scripts/speech-licenses/JINJA-LICENSE");
+    assert.ok(result.includes(jinjaLicense.toString()));
+    const sourcePins = JSON.parse(await readFile("scripts/dependency-sources.json", "utf8"));
+    assert.deepEqual({ bytes: jinjaLicense.length, sha256: createHash("sha256").update(jinjaLicense).digest("hex") },
+      sourcePins.archives.find(item => item.id === "jinja").evidenceFiles.LICENSE);
+    assert.ok(!result.includes("@huggingface/jinja@0.5.10"));
     for (const [name, item] of Object.entries(bundledLicenses)) {
       assert.ok(result.includes(`${name}@${item.version}`));
       assert.ok(result.includes(await readFile(item.file ?? `node_modules/${name}/LICENSE`, "utf8")));

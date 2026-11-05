@@ -45,6 +45,8 @@ await build({ ...browser, entryPoints: ["src/browser/recognition-worklet.ts"], o
 if (process.argv.includes("--speech-only")) {
   await build({ ...browser, entryPoints: ["src/browser/audio.ts"], outfile: "dist/browser/local-recognizer.js" });
 } else {
+  // This harness entry is generated only by --speech-only, never part of a full package.
+  await rm("dist/browser/local-recognizer.js", { force: true });
   await build({ ...browser, entryPoints: ["src/browser/index.ts"], outfile: "dist/browser/index.js" });
   await build({ entryPoints: ["src/server.ts"], outfile: "dist/server.js", bundle: true, format: "esm", platform: "node", target: "node24" });
   await build({ entryPoints: ["src/companion.ts"], outfile: "dist/companion.js", bundle: true, format: "esm", platform: "node", target: "node24", packages: "external" });

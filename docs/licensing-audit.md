@@ -23,6 +23,12 @@ Generated package review used esbuild metadata and `npm pack --dry-run --json --
 | onnxruntime-common | 1.21.0 | MIT |
 | @jmfederico/pi-web | 1.202610.3 | MIT |
 
+The direct-input table is not exhaustive of upstream prebundles: the later
+[source inspection](dependency-sources.md) identifies embedded MIT
+`@huggingface/jinja@0.5.3` in Transformers and now preserves its complete notice
+and full source/build archive. ORT web also embeds common sources at its own
+native revision, distinct from direct common 1.21.0.
+
 The companion's external host dependencies are not bundled into it. This inventory is not a full transitive-development SBOM. In particular, including ONNX's complete upstream third-party notice is conservative preservation, not a determination of precisely which native components the WASM contains.
 
 ## Fixed gaps
@@ -34,11 +40,11 @@ The companion's external host dependencies are not bundled into it. This invento
 
 ## External provenance findings
 
-### Phonemizer / eSpeak — hard blocker
+### Retired published phonemizer / eSpeak — historical hard blocker
 
 - `phonemizer@1.2.1` is pinned to wrapper commit [`6835144b7ee9043129222549c1ed2f6a27216278`](https://github.com/xenova/phonemizer.js/tree/6835144b7ee9043129222549c1ed2f6a27216278). Its README identifies eSpeak NG. Its tree includes generated `src/espeakng.worker.js` and `data/espeakng.worker.data` plus wrapper/Rollup sources, but does not establish the exact native source, dictionary inputs, patches and toolchain used for those generated artifacts.
 - [Upstream issue #6](https://github.com/xenova/phonemizer.js/issues/6), “Invalid license”, was still open when inspected. Its existing comment asks for this exact source/build information. No response supplying it was present. No comment or issue was posted during this audit.
-- The candidate eSpeak commit in `TTS-NOTICE.txt` remains an **unverified reference**, not corresponding-source evidence. The Apache wrapper label and copied GPL text do not fix this.
+- At the original audit boundary, the candidate eSpeak reference did not establish corresponding source for the published binary. The subsequent source-built replacement has its own verified pins and source handoff; it does not retrospectively qualify that retired binary.
 - GPLv3 defines Corresponding Source in §1 and network object-code/source conveyance in §6(d): [license text](https://www.gnu.org/licenses/gpl-3.0.html). The distribution design must account for the actual covered work and recipients. A separate worker, dynamic import or external pack is not automatically a copyleft exemption; nor does it establish that every backend file must be relicensed.
 
 ### Kokoro model / voice — better documented, not independently cleared
@@ -62,10 +68,10 @@ The pinned [converted card](https://huggingface.co/onnx-community/whisper-tiny.e
 5. Update `scripts/tts-pack.json` **and** `src/browser/speech-assets.ts` distribution policy. Changed bytes require new pins/cache identity and re-export/reacquisition documentation.
 6. Requalify phonemizer/token fidelity, guarded startup, cancellation, transport refusal, actual model output and Pixel behavior. Source provenance does not establish model correctness or device acceptance.
 
-The subsequent [source-built replacement milestone](phonemizer-candidate.md) implements steps 1–2 and 5, an engine/application/dependency artifact handoff for step 3, and real guarded-browser/tokenizer checks for part of step 6. The dependency package archives and inventory explicitly retain preferred/native-source completeness gaps; assembly is not combined-work license clearance. It does not close the combined-application delivery decision, full-model or device gates. The unknown old binary is not retroactively qualified and is no longer selected by production. No repository-wide relabeling or speculative production substitution was made. An MIT/Apache wrapper around another engine is not sufficient evidence.
+The subsequent [source-built replacement milestone](phonemizer-candidate.md) implements steps 1–2 and 5, an engine/application/dependency artifact handoff for step 3, and real guarded-browser/tokenizer checks for part of step 6. The later [preferred-source resolution](dependency-sources.md) adds full immutable upstream sources/build files for all eight directly bundled dependencies, separately identifies embedded Jinja 0.5.3 and pins native build declarations. Exact native binary correspondence and recursive native-source closure remain open; assembly is not combined-work license clearance. It does not close the combined-application delivery decision, full-model or device gates. The unknown old binary is not retroactively qualified and is no longer selected by production. No repository-wide relabeling or speculative production substitution was made. An MIT/Apache wrapper around another engine is not sufficient evidence.
 
 ## Validation and release posture
 
-Validation after remediation: `npm run verify` (172 unit/contract tests plus 22 asset/release/notice tests), `npm run test:browser` (151 checks with an installed Chromium executable), `npm run test:runtime` (cached/evicted/corrupt scenarios), and `npm run check:package` pass. The available local runtime is Node 22.22.2; Node 24 CI passed for the baseline, not yet for these uncommitted remediation changes. Notice tests cover package detection, complete retained license text, upstream notice integrity and packaging entries; existing tests cover speech hashes and external-payload exclusion. Passing checks demonstrate packaging mechanics, not legal clearance.
+Historical validation at the initial audit-remediation boundary: `npm run verify` (172 unit/contract tests plus 22 asset/release/notice tests), `npm run test:browser` (151 checks with an installed Chromium executable), `npm run test:runtime` (cached/evicted/corrupt scenarios), and `npm run check:package` pass. The available local runtime is Node 22.22.2; That local run did not establish Node 24 validation; subsequent milestone/CI evidence is separate. Notice tests cover package detection, complete retained license text, upstream notice integrity and packaging entries; existing tests cover speech hashes and external-payload exclusion. Passing checks demonstrate packaging mechanics, not legal clearance.
 
 The public source repository and an executable pack are distinct distributions. Nothing found in the inspected reachable history establishes a need to rewrite it, but this is not a universal legal clearance. Release/conveyance of the unqualified TTS pack remains blocked; do not publish by merely changing `private` or copying another license file.

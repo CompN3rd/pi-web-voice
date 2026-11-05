@@ -97,17 +97,22 @@ archive/README/build-record hashes were refreshed. This fixes review P1, not a
 claim that earlier retained builds were contaminated.
 
 `npm run tts:assemble` now assembles a real external handoff. The exercised
-source-only handoff is `/data/pi-web-voice-phonemizer/distribution-3/`:
+reviewed engine/application handoff is
+`/data/pi-web-voice-phonemizer/distribution-4-reviewed/`. The subsequent
+[preferred-source handoff](dependency-sources.md) adds full upstream archives
+and source comparisons without changing these native pins:
 
 - Exact candidate binary, full engine source archive, notices and source mapping,
   checked against repository pins (never the producer's arbitrary hashes).
-- Exact **uncommitted** application source/build inputs from the source allowlist,
+- Exact **working-tree** application source/build inputs from the source allowlist,
   with every path/length/hash recorded. The filename allowlist is not a secret-content scanner; source review remains necessary. No `.git`, `node_modules`, credential-like file paths,
   symlinks, generated plugin output or unexpected binary payloads are copied.
 - Eight actual lock-SHA512-verified npm dependency package archives (not links
   alone), complete bundled/ORT/native notices, and the full lock inventory.
-  Npm archives may contain generated/prebundled code; preferred/native source
-  completeness is **unverified**, particularly ONNX's native runtime inputs.
+  That milestone did not yet supply complete upstream preferred sources.
+  The [subsequent source inventory](dependency-sources.md) supplies seven full
+  upstream archives, identifies embedded Jinja 0.5.3 and retains the unresolved
+  native correspondence/recursive-source closure boundary.
 - `DISTRIBUTION.json` identifies producer/consumer boundaries and remaining
   gates. No release-approval checkbox can waive them. The browser consumes only
   compiled manifest bytes; source metadata never changes executable policy.
@@ -193,8 +198,10 @@ the environment-isolation fix were inspected. The parent independently reran
 verify (173 + 32 tests), browser (151 checks) and recognition runtime checks.
 This does not certify preferred-source completeness or legal compliance.
 
-Next: close dependency preferred/native-source completeness and combined-work
-delivery terms, then full Kokoro qualification. Converted-model/
+Next: close the retained native binary/source correspondence and recursive
+source-delivery gaps, plus combined-work delivery terms, then full Kokoro
+qualification. Immutable dependency sources and executed comparisons are now
+recorded in [preferred-source evidence](dependency-sources.md). Converted-model/
 voice provenance, full-model regression, Pixel performance/intelligibility/privacy,
 isolated-host and release-owner gates stay open. No model weights or voice binary
 were downloaded, no real audio inference was run, and no live-host/device

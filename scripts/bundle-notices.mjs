@@ -1,4 +1,5 @@
 import { readFile, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
 
 // Reviewed bundle inputs, not the entire development dependency tree.
@@ -50,6 +51,15 @@ export async function bundleNoticeText(root, inputs = []) {
     const section = `${name}@${item.version} — ${item.license}\n\n${license}`;
     if (!emitted.has(section)) { sections.push(section); emitted.add(section); }
   }
+  // esbuild sees the prebuilt Transformers file, not its embedded Jinja package.
+  // Its webpack source map identifies 0.5.3, not the separately installed 0.5.10.
+  const sources = JSON.parse(await readFile(join(root, "scripts/dependency-sources.json"), "utf8"));
+  const jinja = sources.embeddedPackages.find(item => item.name === "@huggingface/jinja");
+  const map = JSON.parse(await readFile(join(root, "node_modules/@huggingface/transformers/dist/transformers.web.js.map"), "utf8"));
+  const index = map.sources.findIndex(path => path.endsWith("/node_modules/@huggingface/jinja/dist/index.js"));
+  const embedded = map.sourcesContent[index];
+  if (typeof embedded !== "string" || createHash("sha256").update(embedded).digest("hex") !== jinja.embeddedSource.sha256) throw Error("Unreviewed prebundled Jinja source");
+  sections.push(`@huggingface/jinja@${jinja.version} — MIT (embedded in Transformers.js)\n\n${await readFile(join(root, "scripts/speech-licenses/JINJA-LICENSE"), "utf8")}`);
   return sections.join("\n\n----------------------------------------\n\n") + "\n";
 }
 

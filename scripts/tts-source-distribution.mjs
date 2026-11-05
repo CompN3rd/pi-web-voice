@@ -6,6 +6,7 @@ import { parseArgs } from "node:util";
 import { bundledLicenses, bundleNoticeText } from "./bundle-notices.mjs";
 import { externalOutput, externalPath, packageRoot, sha256, speechManifest, speechPack, validAsset, copySpeechNotices } from "./speech-assets.mjs";
 import { exportSpeechPack } from "./export-speech-pack.mjs";
+import { acquireSourceArchives, dependencySources, sourceArchiveItems, verifiedSourceArchive } from "./dependency-sources.mjs";
 
 const candidatePin = async () => JSON.parse(await readFile(join(packageRoot, "scripts/phonemizer/candidate.json"), "utf8"));
 const describe = bytes => ({ bytes: bytes.length, sha256: sha256(bytes) });
@@ -94,10 +95,10 @@ export function dependencyInventory(sourceFiles) {
     if (url.origin !== "https://registry.npmjs.org" || url.username || url.password || url.search) throw Error("Untrusted dependency source URL");
     return { name, version: item.version, license: reviewed.license, url: item.resolved, integrity: item.integrity,
       archive: `${name.replaceAll("/", "-").replaceAll("@", "")}-${item.version}.tgz`,
-      sourceCompleteness: "Unverified: upstream npm package may contain generated code; archive is not a certification of preferred/native source completeness" };
+      sourceCompleteness: "Package artifact, not preferred-source proof. See UPSTREAM-SOURCES.json for full upstream archives, evidence and retained native-source limitations." };
   });
   return { bundled: selected, allLockedPackages: lock.packages,
-    remainingGates: ["Review preferred-source completeness of each bundled npm archive, including prebundled dependencies.",
+    remainingGates: ["Review UPSTREAM-SOURCES.json evidence and remaining native-source closure gaps; package archives alone do not establish preferred source.",
       "Supply and verify exact ONNX native runtime source/build correspondence; notices and an npm archive alone do not establish it.",
       "Review host/peer boundary and any additional combined-work source obligations.",
       "Review user-facing legal notices/source access and exact source-delivery terms before conveyance.",
@@ -136,7 +137,7 @@ export async function acquireDependencyArchives(inventory, directory, download =
 /** Assemble source evidence independently of weights, or include a verified import pack.
  * No imported manifest can redefine executable pins. This is not a legal-clearance gate.
  */
-export async function assembleTtsDistribution({ output, candidate, input, dependencyArchives, downloadDependencies = false }) {
+export async function assembleTtsDistribution({ output, candidate, input, dependencyArchives, sourceArchives, downloadDependencies = false, downloadSources = false }) {
   output = await externalOutput(output);
   try { await lstat(output); throw Error("Distribution output must not already exist"); }
   catch (error) { if (error.code !== "ENOENT") throw error; }
@@ -144,6 +145,8 @@ export async function assembleTtsDistribution({ output, candidate, input, depend
   const sourceFiles = await applicationSources();
   const dependencies = dependencyInventory(sourceFiles);
   await acquireDependencyArchives(dependencies, dependencyArchives, downloadDependencies);
+  const sources = await dependencySources();
+  await acquireSourceArchives(sources, sourceArchives, downloadSources);
   const manifest = await speechManifest("tts");
   if (manifest.find(item => item.path === "phonemizer/phonemizer.js").sha256 !== sha256(engine.get("phonemizer/phonemizer.js"))) throw Error("Production/candidate mismatch");
   await mkdir(dirname(output), { recursive: true });
@@ -160,6 +163,10 @@ export async function assembleTtsDistribution({ output, candidate, input, depend
       item.artifact = describe(bytes);
     }
     await writeFile(join(temporary, "DEPENDENCIES.json"), JSON.stringify(dependencies, null, 2) + "\n");
+    for (const item of sourceArchiveItems(sources)) {
+      await writeFiles(join(temporary, "upstream-sources"), new Map([[item.archive, await verifiedSourceArchive(sourceArchives, item)]]));
+    }
+    await writeFile(join(temporary, "UPSTREAM-SOURCES.json"), JSON.stringify(sources, null, 2) + "\n");
     let pack;
     if (input) {
       await candidateFiles(input, true);
@@ -180,16 +187,17 @@ export async function assembleTtsDistribution({ output, candidate, input, depend
     const record = {
       schema: 1, status: "review-required", releaseApproved: false, packIncluded: Boolean(pack), ...(pack ? { pack } : {}),
       notices,
-      producerBoundary: "Repository-owned production and candidate pins; exact uncommitted application bytes; lock-integrity-verified npm archives",
+      producerBoundary: "Repository-owned production and candidate pins; exact working-tree application bytes; lock-integrity-verified npm archives; SHA256-verified full upstream source archives and explicit provenance limits",
       consumerBoundary: "Browser reads only compiled manifest and PIVOTTS1 bytes. It does not interpret this source inventory or treat import as license clearance.",
       engine: Object.fromEntries([...engine].map(([path, bytes]) => [path, describe(bytes)])),
       application: Object.fromEntries([...sourceFiles].map(([path, bytes]) => [path, describe(bytes)])),
       dependencyInventory: describe(await readFile(join(temporary, "DEPENDENCIES.json"))),
-      remainingGates: dependencies.remainingGates,
+      upstreamSourceInventory: describe(await readFile(join(temporary, "UPSTREAM-SOURCES.json"))),
+      remainingGates: [...dependencies.remainingGates, ...sources.remainingGates],
       buildInstructions: "application/README.md and scripts/build.mjs; npm ci --ignore-scripts then npm run verify with Node 24+. Native recipe is inside phonemizer-source/source.tar.gz. Original per-file licenses remain; linked engine obligations are GPL-3.0-or-later. Review complete combined-source delivery and legal notices before conveyance."
     };
     await writeFile(join(temporary, "DISTRIBUTION.json"), JSON.stringify(record, null, 2) + "\n");
-    await writeFile(join(temporary, "README.txt"), "REVIEW REQUIRED — NOT RELEASE APPROVAL\nKeep this directory together. Engine source, exact working-tree application source, dependency package archives and notices accompany the executable candidate. Npm archives may contain generated code and do not establish complete preferred/native corresponding source. See DISTRIBUTION.json / DEPENDENCIES.json for remaining gates. No model pack is included unless packIncluded is true. Never convey a lone .pivoice as an approved distribution.\n");
+    await writeFile(join(temporary, "README.txt"), "REVIEW REQUIRED — NOT RELEASE APPROVAL\nKeep this directory together. Engine source, exact working-tree application source, dependency package archives, full upstream source archives and notices accompany the executable candidate. See DISTRIBUTION.json / DEPENDENCIES.json / UPSTREAM-SOURCES.json for evidence and remaining native-source/combined-work gates. Upstream archives are not proof of exact native binary correspondence. No model pack is included unless packIncluded is true. Never convey a lone .pivoice as an approved distribution.\n");
     await rename(temporary, output);
     return record;
   } finally { await rm(temporary, { recursive: true, force: true }); }
@@ -197,8 +205,10 @@ export async function assembleTtsDistribution({ output, candidate, input, depend
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   const { values } = parseArgs({ options: { output: { type: "string" }, candidate: { type: "string" }, input: { type: "string" },
-    "dependency-archives": { type: "string" }, "download-dependencies": { type: "boolean", default: false } } });
+    "dependency-archives": { type: "string" }, "download-dependencies": { type: "boolean", default: false },
+    "source-archives": { type: "string" }, "download-sources": { type: "boolean", default: false } } });
   const record = await assembleTtsDistribution({ output: values.output, candidate: values.candidate, input: values.input,
-    dependencyArchives: values["dependency-archives"], downloadDependencies: values["download-dependencies"] });
+    dependencyArchives: values["dependency-archives"], downloadDependencies: values["download-dependencies"],
+    sourceArchives: values["source-archives"], downloadSources: values["download-sources"] });
   console.log(`Assembled review-required TTS distribution at ${values.output}; packIncluded=${record.packIncluded}. Not release approval.`);
 }

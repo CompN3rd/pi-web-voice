@@ -68,15 +68,19 @@ npm run speech:provision -- --pack tts --output /external/pi-voice-tts \
 # Assemble a source handoff now, without model weights or a .pivoice file:
 npm run tts:assemble -- --candidate /data/verified-native-build \
   --output /external/tts-source-handoff --dependency-archives /external/dependency-archives \
-  --download-dependencies
+  --source-archives /external/upstream-archives --download-dependencies --download-sources
 
 # With all verified local model/voice/runtime assets, also create english-tts.pivoice:
 npm run tts:assemble -- --input /external/pi-voice-tts --candidate /data/verified-native-build \
-  --output /external/tts-complete-handoff --dependency-archives /external/dependency-archives
+  --output /external/tts-complete-handoff --dependency-archives /external/dependency-archives \
+  --source-archives /external/upstream-archives
 ```
 
-`--download-dependencies` acquires only eight lock-integrity-verified public npm
-software archives, not model weights; omit it for offline cached assembly.
+`--download-dependencies` acquires eight lock-integrity-verified public npm
+software archives. Separately, `--download-sources` acquires seven SHA256-pinned
+full upstream source/build archives and the identified embedded Jinja package.
+Neither flag acquires production speech weights/voices; omit both for offline
+cached assembly. See [source evidence and limitations](dependency-sources.md).
 The full native handoff's binary, source archive, notices and mapping must match
 repository pins. `--from-pack` can replace `--from-models` to reuse the compiled
 relative asset layout, not a caller-supplied executable manifest. The candidate
@@ -87,10 +91,11 @@ assembly instead. Recognition CLI behavior is unchanged.
 Assembly preserves exact **uncommitted** application/build/test/docs bytes using
 an explicit source allowlist, refuses symlinks/credential-like paths/unexpected
 payloads and excludes `.git`, `node_modules`, generated outputs and unrelated
-files. It includes concrete dependency package archives and notices, with exact
-hashes in `DISTRIBUTION.json` and `DEPENDENCIES.json`. These archives may contain
-generated code; preferred/native source completeness (notably ONNX) remains an
-explicit review gate, not a claim of complete GPL compliance. A changing
+files. It includes concrete dependency package archives, full upstream source
+archives and notices, with hashes/evidence in `DISTRIBUTION.json`,
+`DEPENDENCIES.json` and `UPSTREAM-SOURCES.json`. Native binary/source
+correspondence and recursive native-source closure (notably ONNX) remain
+explicit gates, not a claim of complete GPL compliance. A changing
 worktree aborts assembly. The browser consumes only compiled pins and pack bytes,
 never the producer's informational source manifests.
 
