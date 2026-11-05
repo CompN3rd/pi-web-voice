@@ -88,7 +88,7 @@ export async function ttsBrowserHarness({ assets, cache, modelAdapter }) {
   try { browser = await chromium.launch({ executablePath, headless: true }); }
   catch (error) { await new Promise(resolve => server.close(resolve)); throw error; }
   return {
-    async context(packBytes) {
+    async context(packInput) {
       const context = await browser.newContext({ serviceWorkers: "block" });
       const unexpected = [];
       await context.route("**/*", route => {
@@ -98,7 +98,10 @@ export async function ttsBrowserHarness({ assets, cache, modelAdapter }) {
       });
       const page = await context.newPage();
       await page.goto(origin);
-      await page.locator("input").setInputFiles({ name: "tts.pivoice", mimeType: "application/octet-stream", buffer: packBytes });
+      // Full model packs exceed Playwright's 50 MiB in-memory upload limit.
+      // Accept their verified external path; small loader fixtures stay in memory.
+      await page.locator("input").setInputFiles(typeof packInput === "string" ? packInput
+        : { name: "tts.pivoice", mimeType: "application/octet-stream", buffer: packInput });
       await page.evaluate(async () => {
         const poisoned = await caches.open("kokoro-voices");
         await poisoned.put("https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/voices/af_heart.bin", new Response(new Uint8Array([1, 2, 3])));

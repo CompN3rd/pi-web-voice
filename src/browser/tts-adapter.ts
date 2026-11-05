@@ -1,6 +1,6 @@
 import { AutoTokenizer, StyleTextToSpeech2Model, Tensor, env } from "@huggingface/transformers";
 import { TTS_MAX_CHUNKS, TTS_MAX_TOTAL_SAMPLES, validTtsPcm } from "./tts-contract.js";
-import { encodeTtsText, planTtsText, TTS_TOKEN_BUDGET } from "./tts-text.js";
+import { encodeTtsText, planTtsText, TTS_CHUNK_TOKEN_BUDGET, TTS_TOKEN_BUDGET } from "./tts-text.js";
 import type { TtsLoader } from "./tts-loader.js";
 
 const MODEL = "onnx-community/Kokoro-82M-v1.0-ONNX";
@@ -45,7 +45,7 @@ export class TtsModelAdapter {
   async chunk(index: number): Promise<Float32Array> {
     if (!Number.isSafeInteger(index) || index !== this.next || index >= this.chunks.length || this.chunks.length > TTS_MAX_CHUNKS) throw new Error("TTS synthesis");
     const ids = this.chunks[index];
-    if (ids.length < 3 || ids.length > TTS_TOKEN_BUDGET) throw new Error("TTS synthesis");
+    if (ids.length < 3 || ids.length > TTS_CHUNK_TOKEN_BUDGET) throw new Error("TTS synthesis");
     // The 510-row style table uses phoneme count, saturating its last row at
     // 509. This selects a style embedding; input_ids are never truncated.
     const styleIndex = Math.min(ids.length - 2, 509) * 256;

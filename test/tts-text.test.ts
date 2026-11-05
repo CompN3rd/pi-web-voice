@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { encodeTtsText, normalizeTtsText, planTtsText, type FidelityTokenizer } from "../src/browser/tts-text.js";
+import { encodeTtsText, normalizeTtsText, planTtsText, TTS_CHUNK_TOKEN_BUDGET, TTS_TOKEN_BUDGET, type FidelityTokenizer } from "../src/browser/tts-text.js";
 import { ttsPrefix } from "../src/browser/tts-contract.js";
 const charEncoder = async (value: string) => [0, ...Array.from(value, c => c.codePointAt(0)!), 0];
 const tokenizer: FidelityTokenizer = {
@@ -9,11 +9,15 @@ const tokenizer: FidelityTokenizer = {
 };
 
 test("tts-text: budget includes two special tokens and every selected character survives splits", async () => {
-  for (const text of ["word ".repeat(102).trim(), "word ".repeat(103).trim(), "word ".repeat(200).trim(), "Dr. Smith read 123.45 at 10:30! ".repeat(30), "A sentence. Another sentence? ".repeat(30)]) {
+  assert.equal(TTS_TOKEN_BUDGET, 512, "pinned tokenizer capacity is unchanged");
+  assert.equal(TTS_CHUNK_TOKEN_BUDGET, 128, "smaller synthesis budget includes special tokens");
+  for (const text of ["a ".repeat(62) + "aa", "a ".repeat(63) + "a", "word ".repeat(102).trim(), "word ".repeat(103).trim(), "word ".repeat(200).trim(), "Dr. Smith read 123.45 at 10:30! ".repeat(30), "A sentence. Another sentence? ".repeat(30)]) {
     const result = await planTtsText(text, charEncoder);
     assert.equal(result.map(chunk => chunk.text).join(""), normalizeTtsText(text));
-    assert.ok(result.every(chunk => chunk.ids.length <= 512));
-    assert.equal(result.length, text.length <= 510 ? 1 : 2);
+    assert.ok(result.every(chunk => chunk.ids.length <= TTS_CHUNK_TOKEN_BUDGET));
+    assert.equal(result.flatMap(chunk => chunk.ids.slice(1, -1)).map(id => String.fromCodePoint(id)).join(""), normalizeTtsText(text));
+    if (text.length <= TTS_CHUNK_TOKEN_BUDGET - 2) assert.equal(result.length, 1);
+    else assert.ok(result.length > 1);
   }
 });
 
@@ -62,14 +66,14 @@ test("tts-text: unqualified numeric forms reject before any prefix is encoded", 
 test("tts-text: budget splitting cannot bisect numeric expressions or dotted abbreviations", async () => {
   for (const atom of ["3.14", "1,234", "10:30", "U.S.", "1234567890", "3rd"]) {
     const calls: string[] = [];
-    await assert.rejects(planTtsText(atom, async value => { calls.push(value); return Array(513).fill(1); }), /TTS text/);
+    await assert.rejects(planTtsText(atom, async value => { calls.push(value); return Array(TTS_CHUNK_TOKEN_BUDGET + 1).fill(1); }), /TTS text/);
     assert.deepEqual(calls, [atom], atom);
   }
   const text = `${"word ".repeat(98)}123.45 ${"word ".repeat(98).trim()}`;
   const chunks = await planTtsText(text, charEncoder);
   assert.equal(chunks.map(chunk => chunk.text).join(""), text);
   assert.equal(chunks.filter(chunk => chunk.text.includes("123.45")).length, 1);
-  assert.ok(chunks.every(chunk => chunk.ids.length <= 512));
+  assert.ok(chunks.every(chunk => chunk.ids.length <= TTS_CHUNK_TOKEN_BUDGET));
   await assert.rejects(planTtsText("1".repeat(511), charEncoder), /TTS text/);
 });
 

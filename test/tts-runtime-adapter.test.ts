@@ -45,15 +45,18 @@ function loader(): TtsLoader {
 test("tts-adapter: explicit voice, fixed speed, exact token inputs and all-prefix preflight before synthesis", async () => {
   sink.inputs = []; sink.disposed = 0;
   const adapter = await TtsModelAdapter.create(loader());
-  assert.equal(await adapter.plan("a ".repeat(254) + "aa"), 1);
+  assert.equal(await adapter.plan("a ".repeat(62) + "aa"), 1);
   assert.equal(sink.inputs.length, 0);
   const pcm = await adapter.chunk(0);
   assert.ok(pcm instanceof Float32Array); assert.notEqual(pcm, sink.waveform);
-  assert.equal(sink.inputs[0].ids.length, 512); assert.equal(sink.inputs[0].style, 509); assert.equal(sink.inputs[0].speed, 1);
-  assert.deepEqual(sink.inputs[0].dims, [1, 512]); assert.equal(sink.disposed, 4);
-  assert.equal(await adapter.plan("a ".repeat(499) + "aa"), 2);
-  await adapter.chunk(0); await adapter.chunk(1);
-  assert.equal(sink.inputs.slice(1).reduce((sum, input) => sum + input.ids.length - 2, 0), 1000);
+  assert.equal(sink.inputs[0].ids.length, 128); assert.equal(sink.inputs[0].style, 126); assert.equal(sink.inputs[0].speed, 1);
+  assert.deepEqual(sink.inputs[0].dims, [1, 128]); assert.equal(sink.disposed, 4);
+  const text = "a ".repeat(499) + "aa";
+  const count = await adapter.plan(text);
+  assert.ok(count > 2, "synthesis chunks are smaller than the model context");
+  for (let i = 0; i < count; i++) await adapter.chunk(i);
+  assert.ok(sink.inputs.every(input => input.ids.length <= 128));
+  assert.equal(sink.inputs.slice(1).flatMap(input => input.ids.slice(1, -1)).map(id => String.fromCodePoint(Number(id))).join(""), text);
 });
 
 test("tts-adapter: unsupported later spans, malformed voice, out-of-order chunks and invalid PCM reject", async () => {

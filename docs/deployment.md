@@ -4,7 +4,7 @@ The plugin requires **no additional host route, reverse-proxy mapping or inferen
 
 ## What is installed
 
-The normal Pi package contains the panel, recognition worker/worklet and TTS bootstrap/worker/controller JavaScript, text backend/companion, notices and pinned speech-asset metadata. Keep it below Pi Web's pinned **16 MiB total uncompressed artifact** limit. The current build is approximately 4.75 MB uncompressed, including two Transformers worker bundles. Model weights, voice/phonemizer assets and large WASM files are acquired by the browser separately and do not belong in the installed package directory.
+The normal Pi package contains the panel, recognition worker/worklet and TTS bootstrap/worker/controller JavaScript, text backend/companion, notices and pinned speech-asset metadata. Keep it below Pi Web's pinned **16 MiB total uncompressed artifact** limit. The current build is approximately 5.50 MB uncompressed, including two Transformers worker bundles. Model weights, voice/phonemizer assets and large WASM files are acquired by the browser separately and do not belong in the installed package directory.
 
 Use the normal Pi package installation flow after explicit authorization. Enable the plugin and its companion as described in README. New server-plugin activation still requires an authorized daemon restart outside hosted sessions; this interrupts active sessions. Nothing in the build/acquisition tools performs live activation or restarts.
 
@@ -47,7 +47,7 @@ Keep large source/export files **outside all installed plugin roots**, including
 
 ## TTS pack preparation and playback
 
-ADR 0002's Kokoro runtime and Playback UI are implemented. Use **Prepare cached TTS pack** or **Choose TTS pack** followed by **Import selected TTS pack**. Do not pass it to the recognition importer. Preparation never opens the microphone or speaks; separately enable English Heart playback and tap Speak. Only pinned `af_heart` at normal speed is available, with no OS/cloud/alternate-voice fallback. Unsupported text fails conservatively; full-model TTS, Pixel and host acceptance remain unrun. See [qualification and unresolved license gates](tts-qualification.md).
+ADR 0002's Kokoro runtime and Playback UI are implemented. Use **Prepare cached TTS pack** or **Choose TTS pack** followed by **Import selected TTS pack**. Do not pass it to the recognition importer. Preparation never opens the microphone or speaks; separately enable English Heart playback and tap Speak. Only pinned `af_heart` at normal speed is available, with no OS/cloud/alternate-voice fallback. Unsupported text fails conservatively; synthetic desktop full-model checks and an [installed isolated-host test release](isolated-test-release.md) have passed; listening, Pixel and production-host acceptance remain unrun. See [qualification and unresolved license gates](tts-qualification.md).
 
 Preparing TTS releases idle recognition; preparing recognition releases TTS. Only one heavyweight runtime is resident per document. Stop speaking releases TTS resources and requires explicit reprepare. Full off/context/hide revokes playback enablement and instruction allowances. Independent cache inspection/clear controls distinguish cached bytes from initialized readiness. Clear cancels only the selected pack's page-owned use and deletes its exact compiled cache identity, not other packs/revisions, host data or worker ledgers. Other tabs are not canceled. Uncertain capture/playback teardown retains ownership up to five seconds and then latches audio unsafe until reload; cache clear/remount is not recovery.
 
@@ -118,7 +118,7 @@ npm pack --ignore-scripts
 
 `verify` includes strict typechecking, unit/deployment tests and bundling. `test:browser` uses fake media/inference/host in an installed Chromium/Edge browser. `test:runtime` exercises actual pinned ONNX glue/WASM, including its blocked XHR fallback. The package gate sums all packed files' **uncompressed bytes**, not tarball compression, and excludes large speech payloads.
 
-The optional `npm run test:model -- --output /external/pi-voice-pack` uses an existing local verified asset directory, constructs a matching import file, and exercises actual browser inference. It downloads no weights and serves no model route. Synthetic PCM output proves initialization/inference wiring, not speech accuracy or Pixel performance.
+The optional `npm run test:model -- --output /external/pi-voice-pack` uses an existing local verified asset directory, constructs a matching import file, and exercises actual browser inference. It downloads no weights and serves no model route. Synthetic PCM output proves initialization/inference wiring, not speech accuracy or Pixel performance. An optional known-sentence Kokoro-to-Whisper round-trip uses the production 24 kHz to 16 kHz resampler; it is not a microphone or general accuracy test.
 
 The additional TTS checks are separately invoked (no automatic download):
 
@@ -130,7 +130,23 @@ VOICE_TTS_PHONEMIZER_FILE=/external/phonemizer.js npm run test:tts-phonemizer
 VOICE_TTS_PACK_FILE=/external/english-tts.pivoice npm run test:tts-model
 ```
 
-Set the corresponding environment variables using your shell's syntax on Windows. The loader check exercises real phonemizer/ORT without model weights; the model check requires operator-provided weights and remains unrun. Neither establishes Pixel performance or intelligibility. Do not fetch weights to make default tests pass.
+Optionally save only the smoke test's fixed synthetic sentence outside the repository,
+then run a known-sentence recognition regression (no user/microphone recording):
+
+```sh
+VOICE_TTS_PACK_FILE=/external/english-tts.pivoice \
+  VOICE_TTS_SYNTHETIC_OUTPUT=/external/synthetic-hello.json npm run test:tts-model
+npm run test:model -- --output /external/pi-voice-pack \
+  --synthetic-speech /external/synthetic-hello.json
+```
+
+The synthetic output path is exclusive (must not exist); ordinary model tests and
+production playback persist no PCM. The TTS suite requires short and multi-chunk
+success, cancellation/reprepare and zero inference transport attempts. Original
+long fixtures separately report completion or bounded fail-closed timeouts; a
+passed stress check is not a claim that long playback completed on this CPU.
+
+Set the corresponding environment variables using your shell's syntax on Windows. The loader check exercises real phonemizer/ORT without model weights; the model check requires operator-provided weights; executed synthetic desktop results and slow-CPU limits are recorded in [model validation](model-validation.md). Neither establishes Pixel performance or intelligibility. Do not fetch weights to make default tests pass.
 
 Reload the full page when upgrading from OS-synthesis builds; do not hot-swap controllers while legacy audio may exist.
 

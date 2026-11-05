@@ -1,6 +1,17 @@
 # Validation and delivery record
 
-## Current ADR 0002 integration checkpoint
+## Actual-model execution update (2026-11-05)
+
+[Model validation](model-validation.md) records explicitly acquired, hash-verified
+Whisper/Kokoro assets, actual desktop Chromium inference, a known synthetic
+Kokoro-to-Whisper round-trip, the CI race reproduction/fix, and bounded synthesis
+work. The [installed isolated-host test release](isolated-test-release.md) also
+passed real worker/question/reply and actual model capture/playback checks.
+Listening, Pixel and production-host acceptance remain separate. No production daemon or public release was performed by
+these tests. The earlier checkpoint below preserves its historical counts and
+then-unrun model status; those statements do not supersede the new measurements.
+
+## Prior ADR 0002 integration checkpoint (historical)
 
 Runtime, audio/controller and UI replacement are implemented: pinned English Whisper recognition and Kokoro `af_heart` TTS run in browser workers; no OS/cloud/system/alternate-voice fallback remains. Separate acquisition/preparation, explicit enablement and Speak, exact selected-pack cache clearing, runtime handoff and persistent audio safety ownership are implemented. Full off/context/hide revokes authority; Stop releases TTS and requires reprepare. Capture tracks stop synchronously while asynchronous graph teardown remains owned, with a five-second deadline/unsafe latch.
 

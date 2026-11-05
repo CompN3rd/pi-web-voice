@@ -96,9 +96,17 @@ try {
     const longText = "Read 3.14 at 10:30. ".repeat(45).trim();
     const longCalls = [];
     const longChunks = await planTtsText(longText, text => encodeTtsText(text, async (span, language) => { longCalls.push(span); return phonemize(span, language); }, tokenizer));
-    check(longChunks.length > 1 && longChunks.every(chunk => chunk.ids.length <= 512), "real token-budget splitting");
+    check(longChunks.length > 1 && longChunks.every(chunk => chunk.ids.length <= 128), "real token-budget splitting");
     check(longChunks.map(chunk => chunk.text).join("") === longText, "long prefix changed");
     check(longCalls.every(span => ["Read", "3.14", "at", "10:30"].includes(span)), "numeric span split during real preflight");
+    // This valid numeric form fits the model context but not a bounded synthesis
+    // chunk. Reject the indivisible expression instead of splitting its meaning.
+    const atomicIds = await encodeTtsText("111111111111111", phonemize, tokenizer);
+    check(atomicIds.length > 128 && atomicIds.length <= 512, "atomic synthesis-budget premise changed");
+    let atomicRejected = false;
+    try { await planTtsText("111111111111111", text => encodeTtsText(text, phonemize, tokenizer)); }
+    catch { atomicRejected = true; }
+    check(atomicRejected, "oversized atomic expression was split");
     let oversizedRejected = false;
     const oversizedCalls = [];
     try {
@@ -123,7 +131,7 @@ try {
     try { await encodeTtsText("Hello", async () => ["həlˈoʊ☃"], tokenizer); } catch { rejected = true; }
     check(rejected, "unsupported phoneme discarded");
     check(deniedTransports === 0, "phonemizer attempted transport");
-    return { evidence, rejects, proseChunks: chunks.length, longChunks: longChunks.length, oversizedRejected, truncation, deniedTransports };
+    return { evidence, rejects, proseChunks: chunks.length, longChunks: longChunks.length, atomicRejected, oversizedRejected, truncation, deniedTransports };
   }, { parts, candidate });
   assert.deepEqual(unexpected, []);
   assert.equal(requests.length, 3, "only the in-memory document and two verified/local modules were requested");

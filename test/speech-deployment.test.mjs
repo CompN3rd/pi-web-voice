@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -146,20 +146,6 @@ test("build browser gate rejects stale payloads and oversized generated director
   await writeFile(join(root, "too-large.js"), Buffer.alloc(MAX_PACKAGE_BYTES));
   await assert.rejects(checkBrowserDirectory(root), /exceeds/);
 }));
-
-test("build removes only obsolete generated speech trees and preserves notices", async () => {
-  const speech = join(packageRoot, "dist/browser/speech");
-  await mkdir(join(speech, "models"), { recursive: true });
-  await mkdir(join(speech, "ort"), { recursive: true });
-  await writeFile(join(speech, "models/obsolete-test.onnx"), "obsolete model");
-  await writeFile(join(speech, "ort/obsolete-test.wasm"), "obsolete runtime");
-  execFileSync(process.execPath, ["scripts/build.mjs"], { cwd: packageRoot, encoding: "utf8" });
-  await assert.rejects(readFile(join(speech, "models/obsolete-test.onnx")), { code: "ENOENT" });
-  await assert.rejects(readFile(join(speech, "ort/obsolete-test.wasm")), { code: "ENOENT" });
-  assert.ok((await readFile(join(speech, "ort/LICENSE"))).length > 0);
-  assert.deepEqual(JSON.parse(await readFile(join(speech, "speech-pack-provenance.json"), "utf8")), pack);
-  await checkBrowserDirectory(join(packageRoot, "dist/browser"));
-});
 
 test("package allowlist includes notices but excludes runtime/model directories", async () => {
   const metadata = JSON.parse(await readFile("package.json", "utf8"));

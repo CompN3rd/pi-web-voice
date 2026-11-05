@@ -1,6 +1,9 @@
 import { TTS_MAX_CHUNKS, TTS_MAX_TEXT } from "./tts-contract.js";
 
 export const TTS_TOKEN_BUDGET = 512;
+// Model capacity is not a practical synthesis size: 512-token chunks exceeded
+// the unchanged inactivity deadline in real single-thread WASM inference.
+export const TTS_CHUNK_TOKEN_BUDGET = 128;
 export interface TtsTextChunk { text: string; ids: number[]; }
 export interface TtsTextEncoder { (text: string): Promise<number[]>; }
 
@@ -70,7 +73,7 @@ export async function planTtsText(text: string, encode: TtsTextEncoder): Promise
     const candidate = queue.shift()!;
     const ids = await encode(candidate);
     if (!Array.isArray(ids) || ids.some(id => !Number.isSafeInteger(id) || id < 0) || ids.length < 3) throw new Error("TTS text");
-    if (ids.length <= TTS_TOKEN_BUDGET) { result.push({ text: candidate, ids }); continue; }
+    if (ids.length <= TTS_CHUNK_TOKEN_BUDGET) { result.push({ text: candidate, ids }); continue; }
     const points = Array.from(candidate);
     if (points.length < 2) throw new Error("TTS text");
     let split = -1;
